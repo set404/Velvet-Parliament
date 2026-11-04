@@ -20,17 +20,18 @@ config/icon="res://icon.svg"
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
+[navigation]
+
+3d/default_cell_size=0.1
+3d/default_cell_height=0.05
+
 [physics]
 
-3d/physics_engine="Jolt Physics"
 common/physics_ticks_per_second=30
+3d/physics_engine="Jolt Physics"
 common/physics_interpolation=true
 
 [rendering]
 
 rendering_device/driver.windows="d3d12"
-
-[navigation]
-
-3d/default_cell_size=0.1
-3d/default_cell_height=0.05
+textures/vram_compression/import_etc2_astc=true

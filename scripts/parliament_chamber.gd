@@ -29,7 +29,8 @@ extends Node3D
 
 @export_group("Build")
 @export var build_collisions := true
-## At runtime, chairs, monitors, bottles and plants become throwable rigid bodies.
+## At runtime the furniture (chairs, desks, monitors, bottles, plants, microphones,
+## papers, the flag, counter, presidium desk and tribune) becomes throwable rigid bodies.
 @export var physical_props := true
 ## Off: lighter lighting for integrated GPUs (no SSIL, one shadowed spot, fewer lamps).
 @export var high_quality := false
@@ -342,17 +343,20 @@ func _build_hemicycle() -> void:
 			var a1 := bounds[s + 1] - rad_to_deg((aisle_width * 0.5 if s < bounds.size() - 2 else 0.15) / r)
 			if a1 <= a0:
 				continue
-			# Continuous curved desk for this sector.
-			_add(_ring(r - 0.72, r - 0.28, a0, a1, y, y + 0.74), _m.wood, Transform3D.IDENTITY, true)
-			_add(_ring(r - 0.77, r - 0.22, a0, a1, y + 0.74, desk_y), _m.wood_top, Transform3D.IDENTITY, true)
-
-			var np := maxi(1, floori(deg_to_rad(a1 - a0) * (r - 0.72) / 1.05))
-			for k in np:
-				var t := lerpf(a0, a1, (k + 0.5) / np)
-				panels.append(Transform3D(_facing(-_polar(1.0, t)), _polar(r - 0.727, t, y + 0.4)))
-
 			var seat_r := r + 0.12
 			var n := maxi(1, floori(deg_to_rad(a1 - a0) * seat_r / seat_spacing))
+			if _loose_furniture():
+				# One liftable desk piece per seat.
+				_desk_pieces(r, y, a0, a1, n)
+			else:
+				# Continuous curved desk for this sector.
+				_add(_ring(r - 0.72, r - 0.28, a0, a1, y, y + 0.74), _m.wood, Transform3D.IDENTITY, true)
+				_add(_ring(r - 0.77, r - 0.22, a0, a1, y + 0.74, desk_y), _m.wood_top, Transform3D.IDENTITY, true)
+				var np := maxi(1, floori(deg_to_rad(a1 - a0) * (r - 0.72) / 1.05))
+				for k in np:
+					var t := lerpf(a0, a1, (k + 0.5) / np)
+					panels.append(Transform3D(_facing(-_polar(1.0, t)), _polar(r - 0.727, t, y + 0.4)))
+
 			for k in n:
 				var t := lerpf(a0, a1, (k + 0.5) / n)
 				var out := _polar(1.0, t)
@@ -376,19 +380,61 @@ func _build_hemicycle() -> void:
 	_multi(_bm(0.78, 0.42, 0.012), _m.burl, panels)
 	_props("chair", _member_chair(_m.leather), seat_transforms)
 	_props("monitor", _monitor(), monitors)
-	_place(_mic(), mics)
+	_props("mic", _mic(), mics)
 	_props("bottle", [_part(_cm(0.032, 0.032, 0.22), _m.bottle, Vector3(0.0, 0.11, 0.0))], bottles)
-	_multi(_bm(0.21, 0.003, 0.297), _m.paper, papers)
+	_props("paper", [_part(_bm(0.21, 0.003, 0.297), _m.paper, Vector3(0.0, 0.0015, 0.0))], papers)
+
+
+## Desk pieces for one sector of a row, each centred on its seat. The pieces share one
+## mesh: a slice of the curved desk (body, top, burl front panel) around local +Z.
+func _desk_pieces(r: float, y: float, a0: float, a1: float, n: int) -> void:
+	var half := (a1 - a0) / n * 0.5
+	var rc := r - 0.495
+	var shift := Transform3D(Basis(), Vector3(0.0, 0.0, -rc))
+	var panel_w := minf(0.78, deg_to_rad(half * 2.0) * (r - 0.727) - 0.18)
+	var parts := [
+		[_ring(r - 0.72, r - 0.28, -half, half, 0.0, 0.74), _m.wood, shift],
+		[_ring(r - 0.77, r - 0.22, -half, half, 0.74, 0.78), _m.wood_top, shift],
+		[_bm(panel_w, 0.42, 0.012), _m.burl, Transform3D(_facing(Vector3.FORWARD), Vector3(0.0, 0.4, (r - 0.727) - rc))],
+	]
+	var width := 2.0 * sin(deg_to_rad(half)) * (r - 0.22)
+	var boxes := [[Vector3(width, 0.78, 0.55), Vector3(0.0, 0.39, 0.0)]]
+	var xforms := []
+	for k in n:
+		var t := lerpf(a0, a1, (k + 0.5) / n)
+		xforms.append(Transform3D(Basis(Vector3.UP, deg_to_rad(t)), _polar(rc, t, y)))
+	_props("desk", parts, xforms, boxes)
+
+
+func _loose_furniture() -> bool:
+	return physical_props and not Engine.is_editor_hint()
 
 
 ## Grabbable furniture: physics props at runtime, cheap static instances in the editor.
-func _props(kind: String, parts: Array, xforms: Array) -> void:
-	if not physical_props or Engine.is_editor_hint():
+## Anchored kinds (desks, counter...) also get a navigation stand-in.
+func _props(kind: String, parts: Array, xforms: Array, boxes: Array = []) -> void:
+	if not _loose_furniture():
 		_place(parts, xforms)
 		return
 	var mesh := _merged_model(parts)
-	for xf in xforms:
-		_root.add_child(ThrowableProp.create(kind, mesh, xf))
+	# Untouched items draw through one shared MultiMesh (see ThrowableProp.batch_into).
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = xforms.size()
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	if kind in ["monitor", "bottle", "mic", "paper"]:
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_root.add_child(mmi)
+	for i in xforms.size():
+		var xf: Transform3D = xforms[i]
+		mm.set_instance_transform(i, xf)
+		var prop := ThrowableProp.create(kind, mesh, xf, boxes)
+		_root.add_child(prop)
+		prop.batch_into(mm, i)
+		if prop.anchored:
+			_root.add_child(prop.make_nav_blocker())
 
 
 # --- Presidium & tribune -----------------------------------------------------
@@ -407,20 +453,49 @@ func _build_presidium() -> void:
 		_box(Vector3(0.45, py * 0.66, 1.6), Vector3(sx * 5.225, py * 0.33, -6.6), _m.carpet, true)
 		_box(Vector3(0.45, py * 0.33, 1.6), Vector3(sx * 5.675, py * 0.165, -6.6), _m.carpet, true)
 
-	# Staff counter on the floor in front of the platform.
-	_box(Vector3(6.0, 0.95, 0.55), Vector3(0.0, 0.475, -3.825), _m.wood, true)
-	_box(Vector3(6.1, 0.04, 0.65), Vector3(0.0, 0.97, -3.825), _m.wood_top)
-	for x in [-2.25, -0.75, 0.75, 2.25]:
-		_box(Vector3(1.2, 0.55, 0.012), Vector3(x, 0.47, -3.544), _m.burl)
+	if _loose_furniture():
+		# The counter and presidium desk come apart in liftable sections.
+		var counter := [
+			_part(_bm(1.5, 0.95, 0.55), _m.wood, Vector3(0.0, 0.475, 0.0)),
+			_part(_bm(1.525, 0.04, 0.65), _m.wood_top, Vector3(0.0, 0.97, 0.0)),
+			_part(_bm(1.2, 0.55, 0.012), _m.burl, Vector3(0.0, 0.47, 0.281)),
+		]
+		var counters := []
+		for x in [-2.25, -0.75, 0.75, 2.25]:
+			counters.append(_at(Vector3(x, 0.0, -3.825)))
+		_props("counter", counter, counters)
+		# Section origin on the platform at z = -4.95: front panel ahead, work surface behind.
+		var desk := [
+			_part(_bm(1.36, 1.2, 0.25), _m.wood, Vector3(0.0, 0.6, 0.225)),
+			_part(_bm(1.38, 0.05, 0.4), _m.wood_top, Vector3(0.0, 1.225, 0.25)),
+			_part(_bm(1.38, 0.03, 0.02), _m.gold, Vector3(0.0, 1.18, 0.365)),
+			_part(_bm(1.32, 0.78, 0.7), _m.wood, Vector3(0.0, 0.39, -0.25)),
+			_part(_bm(1.34, 0.04, 0.78), _m.wood_top, Vector3(0.0, 0.8, -0.25)),
+			_part(_bm(1.0, 0.75, 0.012), _m.burl, Vector3(0.0, 0.58, 0.356)),
+		]
+		var desk_boxes := [
+			[Vector3(1.38, 1.25, 0.4), Vector3(0.0, 0.625, 0.25)],
+			[Vector3(1.34, 0.82, 0.78), Vector3(0.0, 0.41, -0.25)],
+		]
+		var sections := []
+		for x in [-2.72, -1.36, 0.0, 1.36, 2.72]:
+			sections.append(_at(Vector3(x, py, -4.95)))
+		_props("presidium_desk", desk, sections, desk_boxes)
+	else:
+		# Staff counter on the floor in front of the platform.
+		_box(Vector3(6.0, 0.95, 0.55), Vector3(0.0, 0.475, -3.825), _m.wood, true)
+		_box(Vector3(6.1, 0.04, 0.65), Vector3(0.0, 0.97, -3.825), _m.wood_top)
+		for x in [-2.25, -0.75, 0.75, 2.25]:
+			_box(Vector3(1.2, 0.55, 0.012), Vector3(x, 0.47, -3.544), _m.burl)
 
-	# Presidium desk: a tall panelled front with a lower working surface behind it.
-	_box(Vector3(6.8, 1.2, 0.25), Vector3(0.0, py + 0.6, -4.725), _m.wood, true)
-	_box(Vector3(6.9, 0.05, 0.4), Vector3(0.0, py + 1.225, -4.7), _m.wood_top)
-	_box(Vector3(6.9, 0.03, 0.02), Vector3(0.0, py + 1.18, -4.585), _m.gold)
-	_box(Vector3(6.6, 0.78, 0.7), Vector3(0.0, py + 0.39, -5.2), _m.wood, true)
-	_box(Vector3(6.7, 0.04, 0.78), Vector3(0.0, py + 0.8, -5.2), _m.wood_top, true)
-	for x in [-2.6, -1.3, 0.0, 1.3, 2.6]:
-		_box(Vector3(1.0, 0.75, 0.012), Vector3(x, py + 0.58, -4.594), _m.burl)
+		# Presidium desk: a tall panelled front with a lower working surface behind it.
+		_box(Vector3(6.8, 1.2, 0.25), Vector3(0.0, py + 0.6, -4.725), _m.wood, true)
+		_box(Vector3(6.9, 0.05, 0.4), Vector3(0.0, py + 1.225, -4.7), _m.wood_top)
+		_box(Vector3(6.9, 0.03, 0.02), Vector3(0.0, py + 1.18, -4.585), _m.gold)
+		_box(Vector3(6.6, 0.78, 0.7), Vector3(0.0, py + 0.39, -5.2), _m.wood, true)
+		_box(Vector3(6.7, 0.04, 0.78), Vector3(0.0, py + 0.8, -5.2), _m.wood_top, true)
+		for x in [-2.6, -1.3, 0.0, 1.3, 2.6]:
+			_box(Vector3(1.0, 0.75, 0.012), Vector3(x, py + 0.58, -4.594), _m.burl)
 
 	var bosses := []
 	var secretaries := []
@@ -434,16 +509,19 @@ func _build_presidium() -> void:
 		monitors.append(Transform3D(_facing(toward_chairs), Vector3(x, py + 0.82, -5.1)))
 		mics.append(Transform3D(_facing(toward_chairs), Vector3(x + 0.35, py + 0.82, -5.15)))
 	presidium_seat_transforms.assign(bosses + secretaries)
-	_place(_boss_chair(), bosses)
-	_place(_member_chair(_m.leather), secretaries)
+	_props("boss_chair", _boss_chair(), bosses)
+	_props("chair", _member_chair(_m.leather), secretaries)
 	_props("monitor", _monitor(), monitors)
-	_place(_mic(), mics)
+	_props("mic", _mic(), mics)
 
 	# Speaker's tribune on a round dais.
 	_add(_cm(1.3, 1.35, 0.12, 48), _m.rug, Transform3D(Basis(), Vector3(0.0, 0.06, -1.6)), true)
 	tribune_transform = Transform3D(_facing(forward), Vector3(0.0, 0.12, -1.6))
-	_place(_tribune(), [tribune_transform])
-	_box(Vector3(1.06, 1.1, 0.68), tribune_transform.origin + Vector3(0.0, 0.55, 0.0), null, true).visible = false
+	if _loose_furniture():
+		_props("tribune", _tribune(), [tribune_transform])
+	else:
+		_place(_tribune(), [tribune_transform])
+		_box(Vector3(1.06, 1.1, 0.68), tribune_transform.origin + Vector3(0.0, 0.55, 0.0), null, true).visible = false
 
 	_plant(Vector3(-0.95, 0.12, -2.3))
 	_plant(Vector3(0.95, 0.12, -2.3))
@@ -465,9 +543,11 @@ func _plant(pos: Vector3) -> void:
 
 func _flag(base: Vector3) -> void:
 	var pole_h := 2.9
-	_add(_cm(0.022, 0.022, pole_h), _m.gold, Transform3D(Basis(), base + Vector3(0.0, pole_h * 0.5, 0.0)))
-	_add(_sm(0.055), _m.gold, Transform3D(Basis(), base + Vector3(0.0, pole_h + 0.04, 0.0)))
-	_add(_cm(0.14, 0.18, 0.08), _m.gold, Transform3D(Basis(), base + Vector3(0.0, 0.04, 0.0)))
+	var parts := [
+		_part(_cm(0.022, 0.022, pole_h), _m.gold, Vector3(0.0, pole_h * 0.5, 0.0)),
+		_part(_sm(0.055), _m.gold, Vector3(0.0, pole_h + 0.04, 0.0)),
+		_part(_cm(0.14, 0.18, 0.08), _m.gold, Vector3(0.0, 0.04, 0.0)),
+	]
 
 	# Gently drooping cloth: a rippled grid, red/blue/orange stripes top to bottom.
 	var cols := 18
@@ -488,8 +568,8 @@ func _flag(base: Vector3) -> void:
 				st.set_uv(grid[idx][1])
 				st.add_vertex(grid[idx][0])
 	st.generate_normals()
-	var xf := Transform3D(_facing(Vector3(-0.25, 0.0, -1.0)), base + Vector3(0.0, pole_h - 0.08, 0.0))
-	_add(st.commit(), _m.flag, xf)
+	parts.append([st.commit(), _m.flag, Transform3D(_facing(Vector3(-0.25, 0.0, -1.0)), Vector3(0.0, pole_h - 0.08, 0.0))])
+	_props("flag", parts, [_at(base)])
 
 
 # --- Walls -------------------------------------------------------------------
@@ -647,7 +727,7 @@ func _build_gallery(a: float, b: float) -> void:
 		for k in n:
 			var t := lerpf(a + 1.0, b - 1.0, (k + 0.5) / n)
 			chairs.append(Transform3D(_facing(-_polar(1.0, t)), _polar(cr, t, row[1])))
-	_place(_member_chair(_m.leather), chairs)
+	_props("chair", _member_chair(_m.leather), chairs)
 	_omni(_polar(r + 1.3, (a + b) * 0.5, top - 0.3), Color(1.0, 0.85, 0.65), 0.6, 5.0)
 
 

@@ -11,6 +11,8 @@ var _mult: Label
 var _timer: Label
 var _chaos: ProgressBar
 var _health: ProgressBar
+var _level: Label
+var _xp: ProgressBar
 var _bounty: Label
 var _message: Label
 var _popup: Label
@@ -46,8 +48,10 @@ func _ready() -> void:
 	_popup = _label(root, 30, HORIZONTAL_ALIGNMENT_CENTER, 250.0, false, GOLD)
 	_label(root, 14, HORIZONTAL_ALIGNMENT_LEFT, -70.0, true).text = "HEALTH"
 	_health = _bar(root, 0.0, -48.0, 300.0, 18.0, Color(0.25, 0.8, 0.35), true)
+	_level = _label(root, 14, HORIZONTAL_ALIGNMENT_LEFT, -116.0, true, GOLD)
+	_xp = _bar(root, 0.0, -92.0, 300.0, 6.0, GOLD, true)
 	_hint = _label(root, 15, HORIZONTAL_ALIGNMENT_RIGHT, -120.0, true)
-	_hint.text = "WASD move · Shift sprint · Space jump\nLMB punch (tap for combo) · RMB kick\nE grab / throw (knocked-out MPs, chairs, monitors, bottles, plants) · Esc free mouse"
+	_hint.text = "WASD move · Shift sprint · Space jump\nLMB punch (tap for combo) · RMB kick\nE grab / throw (anything in the chamber; big furniture needs Strength) · Tab skills · Esc free mouse"
 
 	var dot := ColorRect.new()
 	dot.color = Color(1, 1, 1, 0.6)
@@ -143,6 +147,12 @@ func update_stats(score: int, mult: int, time_left: float, riot: bool, chaos: fl
 	_bounty.text = bounty
 
 
+func update_progress(level: int, xp_into: int, xp_needed: int, points: int) -> void:
+	_level.text = "LEVEL %d" % level + ("   ·   %d skill point%s  (Tab)" % [points, "" if points == 1 else "s"] if points > 0 else "")
+	_xp.max_value = xp_needed
+	_xp.value = xp_into
+
+
 func show_message(text: String, seconds := 2.5) -> void:
 	_message.text = text
 	_msg_left = seconds
@@ -157,8 +167,12 @@ func flash_damage() -> void:
 	_flash.color.a = 0.28
 
 
-func show_results(title: String, body: String) -> void:
-	_results_text.text = "%s\n\n%s\n\nPress R to start a new session" % [title, body]
+func show_results(title: String, body: String, can_change_character := false) -> void:
+	_results_text.text = "%s\n\n%s\n\nPress R to start a new session · Tab for skills" % [title, body]
+	if can_change_character:
+		_results_text.text += "\nPress C to choose another character"
+	_results.offset_top = -250
+	_results.offset_bottom = 250
 	_results.visible = true
 	_message.text = ""
 

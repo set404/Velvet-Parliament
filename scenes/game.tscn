@@ -1,10 +1,11 @@
-[gd_scene format=3]
+[gd_scene format=3 uid="uid://dhtr64r1drrim"]
 
-[ext_resource type="Script" path="res://scripts/game/riot_game.gd" id="1_game"]
-[ext_resource type="Script" path="res://scripts/parliament_chamber.gd" id="2_chamber"]
+[ext_resource type="Script" uid="uid://qlnxlauqo8km" path="res://scripts/game/riot_game.gd" id="1_game"]
+[ext_resource type="Script" uid="uid://cbbrb6odaflb6" path="res://scripts/parliament_chamber.gd" id="2_chamber"]
 
-[node name="RiotGame" type="Node3D"]
+[node name="RiotGame" type="Node3D" unique_id=280553092]
 script = ExtResource("1_game")
 
-[node name="ParliamentChamber" type="Node3D" parent="."]
+[node name="ParliamentChamber" type="Node3D" parent="." unique_id=94062420]
 script = ExtResource("2_chamber")
+aisle_angles = PackedFloat32Array(-50, 0, 50)

@@ -70,7 +70,7 @@ func _physics_process(delta: float) -> void:
 		_read_actions()
 	_regen_delay -= delta
 	if _regen_delay <= 0.0 and not down:
-		health = minf(max_health, health + 4.0 * delta)
+		health = minf(max_health, health + regen_rate * delta)
 	if _attack == "":
 		_face_dir = Vector3.ZERO
 	super(delta)
@@ -116,6 +116,9 @@ func _wish_velocity() -> Vector3:
 	var v := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var dir := Basis(Vector3.UP, _yaw) * Vector3(v.x, 0.0, v.y)
 	var speed := move_speed * (SPRINT if Input.is_action_pressed("sprint") else 1.0)
+	# Hauling a desk over your head slows you down.
+	if held_prop != null and held_prop.lift >= 3:
+		speed *= 0.7
 	return dir * speed
 
 

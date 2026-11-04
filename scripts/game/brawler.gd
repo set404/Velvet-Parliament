@@ -8,6 +8,8 @@ extends CharacterBody3D
 
 signal hit_landed(attacker: Node, victim: Brawler, damage: float, kind: String)
 signal knocked_down(victim: Brawler, attacker: Node)
+## Tried to grab something heavier than this brawler's strength allows.
+signal lift_failed(prop: ThrowableProp)
 
 enum Faction { VELVET, IRON, INDEPENDENT, SECURITY, PLAYER }
 
@@ -39,6 +41,18 @@ var max_health := 50.0
 var health := 50.0
 var move_speed := 3.0
 var base_damage := 8.0
+## Which furniture this brawler can lift (see ThrowableProp lift values, 1-5).
+var strength := 1
+## Multiplies throw speed.
+var throw_power := 1.0
+## How long getting back up takes after a knockdown (a character skin with get-up clips
+## lengthens it to fit them), and whether the last one was from lying on the back.
+var getup_time := 0.8
+var got_up_on_back := false
+## Skill effects (the player's Recovery and Iron Chin).
+var getup_mult := 1.0
+var damage_taken := 1.0
+var regen_rate := 4.0
 var down := false
 var seated := false
 var gesturing := false
@@ -305,6 +319,7 @@ func take_hit(damage: float, knock: Vector3, knockdown: bool, attacker: Node, ki
 		return
 	stand_up()
 	_cowering = false
+	damage *= damage_taken
 	health -= damage
 	last_attacker = attacker
 	velocity += knock
@@ -428,7 +443,8 @@ func _end_ragdoll() -> void:
 	var reach := 0.95 * _rig.scale.x
 	_rig.rotation.x = 1.45 if on_back else -1.45
 	_rig.position = Vector3(0.0, 0.13, -reach if on_back else reach)
-	_recover = 0.8
+	_recover = getup_time * getup_mult
+	got_up_on_back = on_back
 	reset_physics_interpolation()
 
 
@@ -468,22 +484,36 @@ func try_grab() -> bool:
 	if is_holding() or down or seated or _attack != "":
 		return false
 	# Reach is measured flat, so items on a desk count as close; prefer what's in front.
+	# Big furniture counts from near its edge rather than its middle, but loose items
+	# still win when both are in reach (clear the desk, then lift it).
 	var best: ThrowableProp
 	var best_d := 1.5
+	var too_heavy: ThrowableProp
+	var heavy_d := 1.5
 	var fwd := -global_basis.z
 	for node in get_tree().get_nodes_in_group("props"):
 		var p := node as ThrowableProp
 		if p == null or not p.can_pick():
 			continue
 		var to := p.global_position - global_position
-		if to.y < -0.6 or to.y > 1.4:
+		if to.y < -0.9 or to.y > 1.4:
 			continue
 		to.y = 0.0
-		var d := to.length() - maxf(0.0, fwd.dot(to.normalized())) * 0.4
+		var flat := to.length()
+		if p.anchored or p.lift > 1:
+			flat = maxf(0.0, flat - 0.25)
+		var d := flat - maxf(0.0, fwd.dot(to.normalized())) * 0.4
+		if not p.can_lift(strength):
+			if d < heavy_d:
+				too_heavy = p
+				heavy_d = d
+			continue
 		if d < best_d:
 			best = p
 			best_d = d
 	if best == null:
+		if too_heavy != null:
+			lift_failed.emit(too_heavy)
 		return false
 	best.pick_up(self, _hold)
 	held_prop = best
@@ -507,7 +537,7 @@ func throw_held(dir: Vector3) -> void:
 	elif held_prop != null:
 		var prop := held_prop
 		held_prop = null
-		prop.throw(dir, prop.throw_speed, self)
+		prop.throw(dir, prop.throw_speed * throw_power, self)
 	else:
 		return
 	_attack = "throw"

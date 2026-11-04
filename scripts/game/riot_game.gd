@@ -6,8 +6,11 @@ extends Node3D
 const SESSION_TIME := 180.0
 const MP_COUNT := 72
 const MAX_GUARDS := 8
-## Points for landing a thrown item (before the combo multiplier).
-const THROW_POINTS := {"body": 100, "chair": 75, "monitor": 60, "plant": 60, "bottle": 25}
+## Points for landing a thrown item (before the combo multiplier). Base points also
+## count as XP toward the next level.
+const THROW_POINTS := {"body": 100, "chair": 75, "monitor": 60, "plant": 60, "bottle": 25,
+	"mic": 20, "paper": 10, "boss_chair": 100, "flag": 90, "desk": 150, "counter": 175,
+	"presidium_desk": 200, "tribune": 250}
 const FIRST_NAMES := ["Aram", "Narek", "Ani", "Lilit", "Tigran", "Gor", "Mane", "Davit", "Karen", "Hayk",
 	"Sona", "Arsen", "Mariam", "Levon", "Anahit", "Vahe", "Nune", "Samvel", "Gayane", "Artur"]
 const LAST_NAMES := ["Petrosyan", "Hakobyan", "Sargsyan", "Grigoryan", "Harutyunyan", "Mkrtchyan",
@@ -36,6 +39,8 @@ var bounty: NpcBrawler
 var _mult_left := 0.0
 var _escalate := 0.0
 var _guard_timer := 6.0
+var _heavy_msg_cd := 0.0
+var _skills: SkillPanel
 
 
 func _ready() -> void:
@@ -45,7 +50,20 @@ func _ready() -> void:
 	hud = Hud.new()
 	add_child(hud)
 	_spawn_members()
-	_spawn_player()
+	# Pick a character first, unless there is nothing to pick from, it was already picked
+	# (restarting with R keeps it) or this is a debug capture.
+	if CharacterRoster.list().size() > 1 and not CharacterRoster.has_selected and _shot_path() == "":
+		hud.visible = false
+		var select := CharacterSelect.new()
+		select.chosen.connect(_begin)
+		add_child(select)
+	else:
+		_begin(CharacterRoster.selected_path)
+
+
+func _begin(character_path: String) -> void:
+	hud.visible = true
+	_spawn_player(character_path)
 	hud.show_message("The session is in order. For now.\nThrow the first punch.", 6.0)
 	if _shot_path() != "":
 		_capture(_shot_path())
@@ -64,6 +82,8 @@ func _setup_input() -> void:
 	_bind("punch", [KEY_J], MOUSE_BUTTON_LEFT)
 	_bind("kick", [KEY_K], MOUSE_BUTTON_RIGHT)
 	_bind("restart", [KEY_R])
+	_bind("change_character", [KEY_C])
+	_bind("skills", [KEY_TAB])
 
 
 func _bind(action: StringName, keys: Array, mouse_button := MOUSE_BUTTON_NONE) -> void:
@@ -90,7 +110,8 @@ func _bake_navigation() -> void:
 	nav.agent_max_climb = 0.35
 	nav.agent_max_slope = 40.0
 	nav.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
-	nav.geometry_collision_mask = Brawler.LAYER_WORLD
+	# Anchored furniture is a frozen rigid body, so it's baked through its stand-in.
+	nav.geometry_collision_mask = Brawler.LAYER_WORLD | ThrowableProp.LAYER_NAV
 	nav.geometry_source_geometry_mode = NavigationMesh.SOURCE_GEOMETRY_GROUPS_WITH_CHILDREN
 	nav.geometry_source_group_name = &"nav_source"
 	nav.filter_baking_aabb = AABB(Vector3(-15.0, -0.5, -10.5), Vector3(30.0, 4.0, 26.0))
@@ -168,17 +189,15 @@ func _add_npc(npc: NpcBrawler) -> void:
 	npc.knocked_down.connect(_on_knocked_down)
 
 
-func _spawn_player() -> void:
+func _spawn_player(character_path := "") -> void:
 	player = PlayerBrawler.new()
-	player.build_body(Color(0.78, 0.76, 0.72), Color(0.75, 0.05, 0.08), Color(0.87, 0.7, 0.56), Color(0.1, 0.07, 0.05))
-	player.max_health = 100.0
-	player.health = 100.0
-	player.move_speed = 4.4
-	player.base_damage = 12.0
+	CharacterRoster.dress(player, character_path)
+	Progression.apply_to(player)
 	player.position = Vector3(0.0, 0.05, 2.6)
 	add_child(player)
 	player.hit_landed.connect(_on_hit_landed)
 	player.knocked_down.connect(_on_knocked_down)
+	player.lift_failed.connect(_on_lift_failed)
 
 
 # --- Riot flow -----------------------------------------------------------------
@@ -192,14 +211,57 @@ func _start_riot() -> void:
 		n.rouse(0.8)
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	if player != null and _skills == null and event.is_action_pressed("skills"):
+		get_viewport().set_input_as_handled()
+		_open_skills()
+
+
+func _open_skills() -> void:
+	_skills = SkillPanel.new()
+	_skills.pause_game = true
+	_skills.closed.connect(_on_skills_closed)
+	add_child.call_deferred(_skills)
+
+
+## New skill levels take effect right away, keeping the current share of health.
+func _on_skills_closed() -> void:
+	_skills = null
+	var share := player.health / player.max_health
+	var down := player.down
+	Progression.apply_to(player)
+	if not down:
+		player.health = player.max_health * share
+	if not over:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _on_lift_failed(prop: ThrowableProp) -> void:
+	if _heavy_msg_cd > 0.0:
+		return
+	_heavy_msg_cd = 1.5
+	hud.show_message("Too heavy! The %s needs Strength %d (you have %d)\nLevel up and spend points: Tab" % [
+		prop.display_name(), prop.required_strength(), player.strength], 2.5)
+
+
 func _physics_process(_delta: float) -> void:
+	if player == null:
+		return
 	Brawler.focus = player.global_position
 	Brawler.update_separation(get_tree().get_nodes_in_group("brawlers"))
 
 
 func _process(delta: float) -> void:
+	if player == null:
+		return
+	_heavy_msg_cd -= delta
+	var prog := Progression.level_progress()
+	hud.update_progress(Progression.level, prog.x, prog.y, Progression.points)
 	if over:
 		if Input.is_action_just_pressed("restart"):
+			get_tree().reload_current_scene()
+		elif Input.is_action_just_pressed("change_character") and CharacterRoster.list().size() > 1:
+			CharacterRoster.has_selected = false
 			get_tree().reload_current_scene()
 		return
 	if riot:
@@ -292,7 +354,8 @@ func _on_hit_landed(attacker: Node, victim: Brawler, _damage: float, kind: Strin
 		player.shake(0.12)
 		if THROW_POINTS.has(kind):
 			throw_hits += 1
-			_add_score(THROW_POINTS[kind], "BODY SLAM" if kind == "body" else "%s SHOT" % kind.to_upper())
+			var label := "BODY SLAM" if kind == "body" else "%s SHOT" % ThrowableProp.NAMES.get(kind, kind).to_upper()
+			_add_score(THROW_POINTS[kind], label)
 		else:
 			_add_score(10)
 	if riot:
@@ -325,12 +388,17 @@ func _on_knocked_down(victim: Brawler, attacker: Node) -> void:
 func _add_score(points: int, label := "") -> void:
 	var gained := points * multiplier
 	score += gained
-	_mult_left = 4.0
+	_mult_left = Progression.combo_window()
 	hud.popup(("%s  +%d" % [label, gained]) if label != "" else "+%d" % gained)
+	var levels := Progression.earn(points)
+	if levels > 0:
+		hud.show_message("LEVEL UP!  Level %d\nPress Tab to spend your skill point%s" % [
+			Progression.level, "s" if Progression.points > 1 else ""], 3.5)
 
 
 func _end(title: String) -> void:
 	over = true
+	Progression.save()
 	player.input_enabled = false
 	if player.down:
 		player.stay_down()
@@ -342,7 +410,15 @@ func _end(title: String) -> void:
 		rank = "Firebrand"
 	elif score >= 3000:
 		rank = "Agitator"
-	hud.show_results(title, "Chaos score  %d\nKnockdowns  %d\nThrow hits  %d\nBounties  %d\n\nRank: %s" % [score, knockouts, throw_hits, bounties, rank])
+	# Finishing a session pays a bonus by rank; the multiplier never counts toward XP.
+	var bonus := {"Backbencher": 40, "Agitator": 100, "Firebrand": 200, "Legend of the Chamber": 350}[rank] as int
+	var before := Progression.level
+	Progression.add_xp(int(bonus * (1.0 + 0.05 * Progression.get_skill("charisma"))))
+	Progression.save()
+	var career := "\n\nSession bonus  +%d XP   ·   Level %d" % [bonus, Progression.level]
+	if Progression.level > before:
+		career += "  (LEVEL UP!)"
+	hud.show_results(title, "Chaos score  %d\nKnockdowns  %d\nThrow hits  %d\nBounties  %d\n\nRank: %s%s" % [score, knockouts, throw_hits, bounties, rank, career], CharacterRoster.list().size() > 1)
 
 
 # --- Helpers -------------------------------------------------------------------
