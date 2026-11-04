@@ -1,0 +1,10 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/game/riot_game.gd" id="1_game"]
+[ext_resource type="Script" path="res://scripts/parliament_chamber.gd" id="2_chamber"]
+
+[node name="RiotGame" type="Node3D"]
+script = ExtResource("1_game")
+
+[node name="ParliamentChamber" type="Node3D" parent="."]
+script = ExtResource("2_chamber")

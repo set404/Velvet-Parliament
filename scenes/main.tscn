@@ -1,0 +1,19 @@
+[gd_scene format=3 uid="uid://d1gm0rxikit8"]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://cbbrb6odaflb6" path="res://scripts/parliament_chamber.gd" id="2_chamber"]
+[ext_resource type="Script" uid="uid://dw323v2hpc0y0" path="res://scripts/orbit_camera.gd" id="3_camera"]
+
+[node name="Main" type="Node3D" unique_id=520278876]
+script = ExtResource("1_main")
+
+[node name="ParliamentChamber" type="Node3D" parent="." unique_id=1614989431]
+script = ExtResource("2_chamber")
+aisle_angles = PackedFloat32Array(-50, 0, 50)
+physical_chairs = null
+high_quality = null
+
+[node name="Camera" type="Camera3D" parent="." unique_id=736606549]
+current = true
+fov = 60.0
+script = ExtResource("3_camera")

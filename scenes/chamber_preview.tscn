@@ -1,0 +1,16 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/chamber_preview.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/parliament_chamber.gd" id="2_chamber"]
+[ext_resource type="Script" path="res://scripts/orbit_camera.gd" id="3_camera"]
+
+[node name="ChamberPreview" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="ParliamentChamber" type="Node3D" parent="."]
+script = ExtResource("2_chamber")
+
+[node name="Camera" type="Camera3D" parent="."]
+current = true
+fov = 60.0
+script = ExtResource("3_camera")
