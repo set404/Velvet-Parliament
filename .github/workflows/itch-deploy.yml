@@ -1,0 +1,86 @@
+# Builds the Windows version of Velvet Parliament with Godot and pushes it to itch.io.
+#
+# Runs when you push a version tag (git tag v0.2.0 && git push --tags) or when you
+# start it by hand from the Actions tab.
+#
+# One-time setup in the GitHub repository (Settings → Secrets and variables → Actions):
+#   Secret   BUTLER_API_KEY  an itch.io API key (itch.io → Settings → API keys)
+#   Variable ITCH_TARGET     your itch user and game page, e.g. yourname/velvet-parliament
+
+name: Deploy to itch.io
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.7.2"
+  ITCH_TARGET: ${{ vars.ITCH_TARGET }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The full template bundle is ~1.3 GB, so Godot and the one template we need are
+      # cached after the first run.
+      - name: Cache Godot and export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-windows-template
+
+      - name: Install Godot and the Windows export template
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          mkdir -p ~/godot
+          curl -fsSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 ~/godot/godot
+          curl -fsSL -o templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          dest=~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          mkdir -p "$dest"
+          unzip -q -j templates.tpz templates/windows_release_x86_64.exe templates/version.txt -d "$dest"
+          rm godot.zip templates.tpz
+
+      - name: Export the Windows build
+        run: |
+          mkdir -p build/windows
+          ~/godot/godot --headless --path . --import
+          ~/godot/godot --headless --path . --export-release "Windows Desktop" build/windows/VelvetParliament.exe
+          test -s build/windows/VelvetParliament.exe
+
+      # Downloadable from the run's page even if the itch push fails.
+      - name: Keep the build with the workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: VelvetParliament-windows
+          path: build/windows
+
+      - name: Install butler
+        run: |
+          curl -fsSL -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip -d ~/butler
+          chmod +x ~/butler/butler
+          ~/butler/butler -V
+
+      - name: Push to itch.io
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: |
+          if [ -z "$ITCH_TARGET" ]; then
+            echo "::error::Set the ITCH_TARGET repository variable, e.g. yourname/velvet-parliament"
+            exit 1
+          fi
+          if [ -z "$BUTLER_API_KEY" ]; then
+            echo "::error::Add your itch.io API key as the BUTLER_API_KEY repository secret"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then version="$GITHUB_REF_NAME"; else version="dev-${GITHUB_SHA::7}"; fi
+          ~/butler/butler push build/windows "$ITCH_TARGET:windows" --userversion "$version"
