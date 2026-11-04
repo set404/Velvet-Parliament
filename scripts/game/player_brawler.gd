@@ -16,6 +16,9 @@ var _combat_t := 0.0
 var _queued := ""
 var _shake := 0.0
 var _regen_delay := 0.0
+## On touch devices the look comes from TouchControls; Android also turns touches into
+## mouse events, which must not turn the camera a second time.
+var _touch := TouchControls.wanted()
 
 
 func _ready() -> void:
@@ -44,15 +47,24 @@ func _ready() -> void:
 	camera.fov = 70.0
 	camera.current = true
 	_arm.add_child(camera)
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if not _touch:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func shake(amount: float) -> void:
 	_shake = maxf(_shake, amount)
 
 
-func _unhandled_input(event: InputEvent) -> void:
+## Camera turn from the touch look area (radians).
+func look(delta: Vector2) -> void:
 	if not input_enabled:
+		return
+	_yaw -= delta.x
+	_pitch = clampf(_pitch - delta.y, -1.2, 0.45)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not input_enabled or _touch:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var motion := event as InputEventMouseMotion
@@ -60,8 +72,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		_pitch = clampf(_pitch - motion.relative.y * MOUSE_SENSITIVITY, -1.2, 0.45)
 	elif event is InputEventMouseButton and event.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	elif event.is_action_pressed("ui_cancel"):
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _physics_process(delta: float) -> void:

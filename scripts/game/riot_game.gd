@@ -41,6 +41,7 @@ var _escalate := 0.0
 var _guard_timer := 6.0
 var _heavy_msg_cd := 0.0
 var _skills: SkillPanel
+var _pause: PauseMenu
 
 
 func _ready() -> void:
@@ -49,6 +50,10 @@ func _ready() -> void:
 	_bake_navigation()
 	hud = Hud.new()
 	add_child(hud)
+	if TouchControls.wanted():
+		var touch := TouchControls.new()
+		touch.game = self
+		add_child(touch)
 	_spawn_members()
 	# Pick a character first, unless there is nothing to pick from, it was already picked
 	# (restarting with R keeps it) or this is a debug capture.
@@ -102,12 +107,18 @@ func _bind(action: StringName, keys: Array, mouse_button := MOUSE_BUTTON_NONE) -
 
 ## Bakes walkable areas (floor, tiers, aisles, presidium steps) from the chamber's colliders.
 func _bake_navigation() -> void:
+	# Fine 5 cm cells and no ledge filter: with coarser cells the 0.15-0.32 m tier risers
+	# were baked as walls and cut the seating rows off from the floor, so nobody could
+	# follow the player up between the desks.
 	var nav := NavigationMesh.new()
-	nav.cell_size = 0.1
+	nav.cell_size = 0.05
+	nav.filter_ledge_spans = false
+	NavigationServer3D.map_set_cell_size(get_world_3d().navigation_map, 0.05)
 	nav.cell_height = 0.05
+	# At least the people's own radius (0.28), so paths keep shoulders clear of desk corners.
 	nav.agent_radius = 0.3
 	nav.agent_height = 1.6
-	nav.agent_max_climb = 0.35
+	nav.agent_max_climb = 0.38
 	nav.agent_max_slope = 40.0
 	nav.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
 	# Anchored furniture is a frozen rigid body, so it's baked through its stand-in.
@@ -119,7 +130,9 @@ func _bake_navigation() -> void:
 	var region := NavigationRegion3D.new()
 	region.navigation_mesh = nav
 	add_child(region)
+	var t0 := Time.get_ticks_msec()
 	region.bake_navigation_mesh(true)
+	print_verbose("navigation baked in %d ms" % (Time.get_ticks_msec() - t0))
 
 
 func _spawn_members() -> void:
@@ -212,15 +225,40 @@ func _start_riot() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if player != null and _skills == null and event.is_action_pressed("skills"):
+	if player == null or _skills != null or _pause != null:
+		return
+	if event.is_action_pressed("skills"):
 		get_viewport().set_input_as_handled()
 		_open_skills()
+	elif event.is_action_pressed("ui_cancel") and not over:
+		get_viewport().set_input_as_handled()
+		_open_pause()
+
+
+func _open_pause() -> void:
+	_pause = PauseMenu.new()
+	_pause.can_change_character = CharacterRoster.list().size() > 1
+	_pause.resumed.connect(func() -> void: _pause = null)
+	_pause.skills_requested.connect(_open_skills)
+	_pause.restart_requested.connect(func() -> void:
+		Progression.save()
+		get_tree().reload_current_scene())
+	_pause.change_character_requested.connect(func() -> void:
+		Progression.save()
+		CharacterRoster.has_selected = false
+		get_tree().reload_current_scene())
+	add_child.call_deferred(_pause)
 
 
 func _open_skills() -> void:
+	if _skills != null:
+		return
 	_skills = SkillPanel.new()
-	_skills.pause_game = true
+	# Opened from the pause menu the game is already paused; it stays paused after.
+	_skills.pause_game = _pause == null
 	_skills.closed.connect(_on_skills_closed)
+	if _pause != null:
+		_pause.set_covered(true)
 	add_child.call_deferred(_skills)
 
 
@@ -232,7 +270,9 @@ func _on_skills_closed() -> void:
 	Progression.apply_to(player)
 	if not down:
 		player.health = player.max_health * share
-	if not over:
+	if _pause != null and is_instance_valid(_pause):
+		_pause.set_covered(false)
+	elif not over:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 

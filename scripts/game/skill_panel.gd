@@ -14,6 +14,9 @@ var pause_game := false
 var _header: Label
 var _xp_bar: ProgressBar
 var _rows := {}
+var _refund: Button
+var _reset: Button
+var _armed := ""
 
 
 func _ready() -> void:
@@ -108,6 +111,21 @@ func _ready() -> void:
 		row.add_child(plus)
 		_rows[id] = {"name": name_l, "desc": desc, "plus": plus, "bar": bar}
 
+	var resets := HBoxContainer.new()
+	resets.alignment = BoxContainer.ALIGNMENT_CENTER
+	resets.add_theme_constant_override("separation", 12)
+	box.add_child(resets)
+	_refund = _button("REFUND SKILLS")
+	_refund.add_theme_font_size_override("font_size", 15)
+	_refund.custom_minimum_size = Vector2(230, 40)
+	_refund.pressed.connect(_on_refund)
+	resets.add_child(_refund)
+	_reset = _button("RESET CAREER")
+	_reset.add_theme_font_size_override("font_size", 15)
+	_reset.custom_minimum_size = Vector2(230, 40)
+	_reset.pressed.connect(_on_reset)
+	resets.add_child(_reset)
+
 	var close := _button("DONE  (Tab)")
 	close.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close.custom_minimum_size = Vector2(220, 46)
@@ -142,7 +160,44 @@ func _refresh() -> void:
 		plus.disabled = not Progression.can_upgrade(id)
 
 
+## Both need a second click: the first one only arms the button.
+func _on_refund() -> void:
+	if _armed != "refund":
+		_arm("refund")
+		return
+	_armed = ""
+	Progression.refund_skills()
+	_reset_labels()
+	_refresh()
+
+
+func _on_reset() -> void:
+	if _armed != "reset":
+		_arm("reset")
+		return
+	_armed = ""
+	Progression.reset_career()
+	_reset_labels()
+	_refresh()
+
+
+func _arm(which: String) -> void:
+	_armed = which
+	_reset_labels()
+	if which == "refund":
+		_refund.text = "CLICK AGAIN: REFUND"
+	else:
+		_reset.text = "CLICK AGAIN: LEVEL 1"
+
+
+func _reset_labels() -> void:
+	_refund.text = "REFUND SKILLS"
+	_reset.text = "RESET CAREER"
+
+
 func _buy(id: String) -> void:
+	_armed = ""
+	_reset_labels()
 	if Progression.upgrade(id):
 		_refresh()
 

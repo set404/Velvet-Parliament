@@ -113,7 +113,7 @@ func _build_ui() -> void:
 	skills.pressed.connect(_open_skills)
 	buttons.add_child(skills)
 	var hint := _plain_label(14, TEXT)
-	hint.text = "A / D or ← / → browse · drag to turn · Tab skills · Enter to play"
+	hint.text = "Tap ◀ ▶ to browse · drag to turn" if TouchControls.wanted() else "A / D or ← / → browse · drag to turn · Tab skills · Enter to play"
 	hint.modulate.a = 0.75
 	bar.add_child(hint)
 	play.grab_focus.call_deferred()

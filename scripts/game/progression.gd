@@ -149,6 +149,31 @@ static func upgrade(id: String) -> bool:
 	return true
 
 
+## Gives back every point spent on skills (skills return to their starting level).
+static func refund_skills() -> int:
+	ensure_loaded()
+	var back := 0
+	for id in SKILLS:
+		for lv in range(SKILLS[id].start, get_skill(id)):
+			back += 1 + lv / 5
+		skills[id] = SKILLS[id].start
+	points += back
+	save()
+	return back
+
+
+## Starts the career over: level 1, no XP, no points, starting skills.
+static func reset_career() -> void:
+	ensure_loaded()
+	xp = 0
+	level = 1
+	points = 0
+	converted = false
+	for id in SKILLS:
+		skills[id] = SKILLS[id].start
+	save()
+
+
 ## XP gathered within the current level, and the size of that level.
 static func level_progress() -> Vector2i:
 	ensure_loaded()

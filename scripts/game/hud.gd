@@ -51,7 +51,8 @@ func _ready() -> void:
 	_level = _label(root, 14, HORIZONTAL_ALIGNMENT_LEFT, -116.0, true, GOLD)
 	_xp = _bar(root, 0.0, -92.0, 300.0, 6.0, GOLD, true)
 	_hint = _label(root, 15, HORIZONTAL_ALIGNMENT_RIGHT, -120.0, true)
-	_hint.text = "WASD move · Shift sprint · Space jump\nLMB punch (tap for combo) · RMB kick\nE grab / throw (anything in the chamber; big furniture needs Strength) · Tab skills · Esc free mouse"
+	_hint.visible = not TouchControls.wanted()
+	_hint.text = "WASD move · Shift sprint · Space jump\nLMB punch (tap for combo) · RMB kick\nE grab / throw (anything in the chamber; big furniture needs Strength) · Tab skills · Esc pause"
 
 	var dot := ColorRect.new()
 	dot.color = Color(1, 1, 1, 0.6)
@@ -168,9 +169,12 @@ func flash_damage() -> void:
 
 
 func show_results(title: String, body: String, can_change_character := false) -> void:
-	_results_text.text = "%s\n\n%s\n\nPress R to start a new session · Tab for skills" % [title, body]
-	if can_change_character:
-		_results_text.text += "\nPress C to choose another character"
+	if TouchControls.wanted():
+		_results_text.text = "%s\n\n%s" % [title, body]
+	else:
+		_results_text.text = "%s\n\n%s\n\nPress R to start a new session · Tab for skills" % [title, body]
+		if can_change_character:
+			_results_text.text += "\nPress C to choose another character"
 	_results.offset_top = -250
 	_results.offset_bottom = 250
 	_results.visible = true
