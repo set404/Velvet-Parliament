@@ -302,5 +302,6 @@ func _on_body_entered(body: Node) -> void:
 	var push := Vector3(linear_velocity.x, 0.0, linear_velocity.z).normalized() * (5.0 if knockdown else 2.0)
 	# Stray throws from the crowd shouldn't end the player's run on their own.
 	var dmg := damage * (0.6 if victim is PlayerBrawler else 1.0)
-	victim.take_hit(dmg, push, knockdown, thrower, kind)
+	# The thrower may have been removed from the chamber while the item was in the air.
+	victim.take_hit(dmg, push, knockdown, thrower if is_instance_valid(thrower) else null, kind)
 	_land()

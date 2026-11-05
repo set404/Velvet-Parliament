@@ -550,6 +550,9 @@ func _capture(path: String) -> void:
 	if OS.get_cmdline_user_args().has("--proptest"):
 		await _prop_test(path)
 		return
+	if OS.get_cmdline_user_args().has("--guardtest"):
+		await _guard_test()
+		return
 	if OS.get_cmdline_user_args().has("--reborntest"):
 		await _reborn_test()
 		return
@@ -569,6 +572,31 @@ func _capture(path: String) -> void:
 		get_viewport().get_texture().get_image().save_png(path)
 	print("SHOT down=%d chaos=%.0f score=%d fps=%d draw_calls=%d" % [npcs.filter(func(n): return n.down).size(), chaos, score, Engine.get_frames_per_second(),
 		RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)])
+	get_tree().quit()
+
+
+## Debug: an MP fights (and holds a grudge against) a guard who is knocked out and then
+## removed from the chamber; the MP must carry on without touching the freed guard.
+func _guard_test() -> void:
+	var guard := _make_guard(Vector3(2.0, 0.05, 0.0))
+	_add_npc(guard)
+	var mp := _make_member(1)
+	mp.position = Vector3(3.0, 0.05, 0.0)
+	_add_npc(mp)
+	for i in 5:
+		await get_tree().physics_frame
+	mp._fight(guard)
+	mp.last_attacker = guard
+	guard.take_hit(1e6, Vector3.ZERO, true, mp, "kick")
+	# The MP is down too, so it is still aiming at the guard when the guard is removed.
+	mp.take_hit(1e6, Vector3.ZERO, true, null, "kick")
+	mp._down_left = 7.0
+	mp._fight(guard)
+	mp.last_attacker = guard
+	for i in 400:
+		await get_tree().physics_frame
+	print("GUARDTEST guard_freed=%s mp_alive=%s mp_state=%s" % [not is_instance_valid(guard), is_instance_valid(mp),
+		NpcBrawler.State.keys()[mp.state]])
 	get_tree().quit()
 
 

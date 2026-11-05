@@ -335,7 +335,9 @@ func is_attacking() -> bool:
 
 func take_hit(damage: float, knock: Vector3, knockdown: bool, attacker: Node, kind: String) -> void:
 	# Punches, kicks, thrown items and thrown bodies all land here: the player only
-	# trades blows with the rival bloc.
+	# trades blows with rival teams.
+	if not is_instance_valid(attacker):
+		attacker = null
 	var by := attacker as Brawler
 	if by != null and by != self and not may_hurt(by, self):
 		return
@@ -706,7 +708,7 @@ func _on_ragdoll_contact(other: Node, part: RigidBody3D) -> void:
 		return
 	_body_hits += 1
 	var push := Vector3(part.linear_velocity.x, 0.0, part.linear_velocity.z).normalized() * 5.0
-	victim.take_hit(25.0, push, true, _thrown_by, "body")
+	victim.take_hit(25.0, push, true, _thrown_by if is_instance_valid(_thrown_by) else null, "body")
 
 
 func _tick_body_flight(delta: float) -> void:

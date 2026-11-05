@@ -167,15 +167,21 @@ func _flee() -> void:
 	_agent.target_position = best + Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
 
 
-func _valid(b: Brawler) -> bool:
-	return b != null and is_instance_valid(b) and not b.down and b.global_position.distance_to(global_position) < 18.0
+## Untyped on purpose: a target can be freed while still referenced (guards are removed
+## after a knockout), and passing a freed object into a Brawler parameter is an error.
+func _valid(b: Variant) -> bool:
+	if b == null or not is_instance_valid(b):
+		return false
+	var o := b as Brawler
+	return o != null and not o.down and o.global_position.distance_to(global_position) < 18.0
 
 
 ## Grudges first, then the nearest rival. Guards break up the nearest MP brawl.
 func _pick_target() -> Brawler:
-	var grudge := last_attacker as Brawler
-	if _valid(grudge) and grudge.global_position.distance_to(global_position) < 14.0:
-		return grudge
+	if _valid(last_attacker):
+		var grudge := last_attacker as Brawler
+		if grudge.global_position.distance_to(global_position) < 14.0:
+			return grudge
 	var best: Brawler
 	var best_d := 9.0
 	for node in get_tree().get_nodes_in_group("brawlers"):
