@@ -33,6 +33,8 @@ func _ready() -> void:
 func seat_at(xf: Transform3D) -> void:
 	state = State.SEATED
 	sit_at(xf)
+	# Knocked out, they're reborn standing at their own seat.
+	home = xf.origin + Vector3.UP * 0.05
 
 
 ## Joins the riot: fights a rival, or runs for an exit.
@@ -169,11 +171,8 @@ func _valid(b: Brawler) -> bool:
 	return b != null and is_instance_valid(b) and not b.down and b.global_position.distance_to(global_position) < 18.0
 
 
-## Grudges first, then the nearest rival. Guards only ever want the player.
+## Grudges first, then the nearest rival. Guards break up the nearest MP brawl.
 func _pick_target() -> Brawler:
-	if is_guard:
-		var p := get_tree().get_first_node_in_group("player") as Brawler
-		return p if _valid(p) else null
 	var grudge := last_attacker as Brawler
 	if _valid(grudge) and grudge.global_position.distance_to(global_position) < 14.0:
 		return grudge
@@ -191,11 +190,17 @@ func _pick_target() -> Brawler:
 
 
 func _is_rival(b: Brawler) -> bool:
-	if b.faction == Faction.SECURITY or b.faction == Faction.PLAYER:
+	# Only rival teams go after the player; guards leave the player alone.
+	if b is PlayerBrawler:
+		return Brawler.rival_teams(self, b)
+	if is_guard:
+		return b is NpcBrawler and not (b as NpcBrawler).is_guard and (b as NpcBrawler).state == State.FIGHT
+	if b.faction == Faction.SECURITY:
 		return false
-	if faction == Faction.INDEPENDENT:
-		return b.faction != Faction.INDEPENDENT
-	return b.faction != faction
+	# Independents pick on team members; team members on everyone not on their team.
+	if team_id < 0:
+		return b.team_id >= 0
+	return b.team_id != team_id
 
 
 func in_combat() -> bool:
@@ -205,8 +210,8 @@ func in_combat() -> bool:
 func _can_hit(other: Brawler) -> bool:
 	if other == target:
 		return true
-	if is_guard:
-		return other.faction == Faction.PLAYER
+	if is_guard or other is PlayerBrawler:
+		return false
 	return other.faction != Faction.SECURITY and randf() < 0.2
 
 

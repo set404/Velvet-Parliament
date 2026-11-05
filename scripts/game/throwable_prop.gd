@@ -22,7 +22,9 @@ const REST_MASK := LAYER_WORLD | LAYER_PROPS | LAYER_RAGDOLL
 
 ## Per kind: mass, damage on hit, whether a hit knocks people down, throw speed,
 ## collision box size and centre, how it sits on the carrier's hold point, the Strength
-## needed to lift it, and whether it starts anchored in place.
+## needed to lift it, and whether it starts anchored in place. "one_hand" items (bottle,
+## microphone, paper) are carried in the right fist instead of over the head; their
+## "hold" is relative to the hand (+Y up, -Z forward while the arm is in its carry pose).
 ## Kinds built from several pieces of different sizes pass their own boxes to create().
 const KINDS := {
 	"chair": {"mass": 9.0, "damage": 30.0, "knockdown": true, "speed": 14.0,
@@ -33,16 +35,18 @@ const KINDS := {
 		"hold": Transform3D(Basis(), Vector3(0.0, 0.05, 0.0))},
 	"bottle": {"mass": 0.6, "damage": 8.0, "knockdown": false, "speed": 19.0,
 		"size": Vector3(0.07, 0.22, 0.07), "center": Vector3(0.0, 0.11, 0.0),
-		"hold": Transform3D(Basis(Vector3.RIGHT, PI * 0.5), Vector3(0.0, 0.1, -0.1))},
+		# Small items sit in the right fist, gripped round the middle.
+		"one_hand": true, "hold": Transform3D(Basis(), Vector3(0.0, -0.11, 0.0))},
 	"plant": {"mass": 8.0, "damage": 20.0, "knockdown": true, "speed": 13.0,
 		"size": Vector3(0.5, 1.05, 0.5), "center": Vector3(0.0, 0.52, 0.0),
 		"hold": Transform3D(Basis(), Vector3(0.0, 0.05, 0.0))},
 	"mic": {"mass": 0.8, "damage": 6.0, "knockdown": false, "speed": 19.0,
 		"size": Vector3(0.09, 0.4, 0.2), "center": Vector3(0.0, 0.18, 0.08),
-		"hold": Transform3D(Basis(), Vector3(0.0, 0.05, 0.0))},
+		"one_hand": true, "hold": Transform3D(Basis(), Vector3(0.0, -0.12, -0.08))},
 	"paper": {"mass": 0.1, "damage": 1.0, "knockdown": false, "speed": 12.0,
 		"size": Vector3(0.21, 0.012, 0.297), "center": Vector3(0.0, 0.006, 0.0),
-		"hold": Transform3D(Basis(Vector3.RIGHT, PI * 0.5), Vector3(0.0, 0.15, -0.1))},
+		# Held up by its top edge, like a sheet being waved at the chamber.
+		"one_hand": true, "hold": Transform3D(Basis(Vector3.RIGHT, PI * 0.5), Vector3(0.0, -0.13, -0.02))},
 	"boss_chair": {"mass": 16.0, "damage": 40.0, "knockdown": true, "speed": 12.0, "lift": 2,
 		"size": Vector3(0.82, 1.85, 0.72), "center": Vector3(0.0, 0.92, -0.08),
 		"hold": Transform3D(Basis(Vector3.RIGHT, PI), Vector3(0.0, 1.9, 0.05))},
@@ -74,6 +78,8 @@ var damage := 30.0
 var knockdown := true
 var throw_speed := 14.0
 var hold_offset := Transform3D.IDENTITY
+## Small enough to carry in one hand (see KINDS).
+var one_hand := false
 ## Lift tier (see LIFT_STRENGTH).
 var lift := 1
 var anchored := false
@@ -105,6 +111,7 @@ static func create(prop_kind: String, mesh: Mesh, xf: Transform3D, boxes: Array 
 	prop.knockdown = spec.knockdown
 	prop.throw_speed = spec.speed
 	prop.hold_offset = spec.hold
+	prop.one_hand = spec.get("one_hand", false)
 	prop.lift = spec.get("lift", 1)
 	prop.anchored = spec.get("anchored", false)
 	prop.continuous_cd = prop_kind in ["bottle", "mic", "paper"]
@@ -194,7 +201,8 @@ func can_lift(strength: int) -> bool:
 	return strength >= required_strength()
 
 
-## Lifts the item over the holder's head (chairs go upside-down).
+## Attaches the item to `hold`: the holder's overhead point (chairs go upside-down), or
+## their right fist for one-handed items (see Brawler.hold_point()).
 func pick_up(by: Node3D, hold: Node3D) -> void:
 	_unbatch()
 	if anchored:

@@ -70,7 +70,7 @@ func _ready() -> void:
 		_unpause()
 		restart_requested.emit())
 	if can_change_character:
-		_add("CHANGE CHARACTER", func() -> void:
+		_add("CHARACTER & TEAMS", func() -> void:
 			_unpause()
 			change_character_requested.emit())
 	_quit_button = _add("QUIT GAME", _quit)

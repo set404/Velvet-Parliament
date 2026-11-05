@@ -132,6 +132,13 @@ func _wish_velocity() -> Vector3:
 	return dir * speed
 
 
+## Swings only connect with rival teams (teammates and bystanders are passed through).
+## The player's team_id is the team picked on the select screen: its MPs are teammates,
+## every other team's MPs fight the player.
+func _can_hit(other: Brawler) -> bool:
+	return Brawler.rival_teams(self, other)
+
+
 func in_combat() -> bool:
 	return _combat_t > 0.0
 

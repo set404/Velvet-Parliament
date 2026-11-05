@@ -56,6 +56,8 @@ var _anim := false
 ##               "fix": Array[Quaternion] (per target bone, see _bind_clips)}
 var _bind := {}
 var _arm_bones: Array[int] = []
+## The right-arm subset, the only one the rig drives for one-handed items.
+var _arm_bones_r: Array[int] = []
 var _rest_q: Array[Quaternion] = []
 var _hips_scale := 1.0     # clip hip units -> this skeleton's units
 var _idle_t := 0.0
@@ -354,6 +356,8 @@ func _bind_clips() -> void:
 		var pivot: Node3D = _drive[bone].pivot
 		if pivot in brawler._shoulders or pivot in brawler._elbows:
 			_arm_bones.append(bone)
+			if pivot == brawler._shoulders[1] or pivot == brawler._elbows[1]:
+				_arm_bones_r.append(bone)
 	# Hip height of this skeleton (above its lowest bone, about the soles) vs the clips'.
 	var low := INF
 	for i in skeleton.get_bone_count():
@@ -573,6 +577,7 @@ func _pose_animated(delta: float) -> void:
 			getup_t = prog * gclip.length * 0.62
 
 	var holding := b.is_holding() and b._attack != "throw"
+	var driven := _arm_bones_r if b.is_holding_one_hand() else _arm_bones
 	_fist = lerpf(_fist, 1.0 if (b.in_combat() or b._attack != "" or b.is_holding()) else 0.0, clampf(delta * 10.0, 0.0, 1.0))
 	var count := _rest_q.size()
 	var local_q: Array[Quaternion] = []
@@ -624,7 +629,7 @@ func _pose_animated(delta: float) -> void:
 		var parent_g := globals[parent] if parent >= 0 else cancel
 		var origin := hips_pos if bone == _root_bone else _rest_local[bone].origin
 		var g := parent_g * Transform3D(Basis(local_q[bone]), origin)
-		if holding and bone in _arm_bones:
+		if holding and bone in driven:
 			var d: Dictionary = _drive[bone]
 			var now := rig_inv * _source(d.pivot as Node3D).get_global_transform_interpolated()
 			var turn := sk_inv_rot * now.basis.orthonormalized() * _sk_rot

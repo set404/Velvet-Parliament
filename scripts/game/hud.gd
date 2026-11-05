@@ -174,7 +174,7 @@ func show_results(title: String, body: String, can_change_character := false) ->
 	else:
 		_results_text.text = "%s\n\n%s\n\nPress R to start a new session · Tab for skills" % [title, body]
 		if can_change_character:
-			_results_text.text += "\nPress C to choose another character"
+			_results_text.text += "\nPress C to change character or teams"
 	_results.offset_top = -250
 	_results.offset_bottom = 250
 	_results.visible = true

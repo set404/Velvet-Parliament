@@ -10,8 +10,11 @@ signal hit_landed(attacker: Node, victim: Brawler, damage: float, kind: String)
 signal knocked_down(victim: Brawler, attacker: Node)
 ## Tried to grab something heavier than this brawler's strength allows.
 signal lift_failed(prop: ThrowableProp)
+## Came back from a knockout (health ran out): full health, at home if there is one.
+signal reborn(who: Brawler)
 
-enum Faction { VELVET, IRON, INDEPENDENT, SECURITY, PLAYER }
+## PARTY members belong to a team (team_id); which one is set up in TeamSetup.
+enum Faction { PARTY, INDEPENDENT, SECURITY, PLAYER }
 
 const LAYER_WORLD := 1
 const LAYER_CHARS := 2
@@ -20,6 +23,12 @@ const GRAVITY := 18.0
 const JUMP_SPEED := 6.2
 const STEP_HEIGHT := 0.36
 const RADIUS := 0.28
+## Right arm while carrying a one-handed item: upper arm a little forward, forearm
+## roughly level in front of the chest.
+const HAND_ARM := 0.55
+const HAND_ELBOW := 1.25
+## After being reborn nothing can hurt them for this long (no beating people as they appear).
+const REBORN_SHIELD := 2.0
 
 ## Timing is in seconds; "hit" is the fraction of the move where the blow lands.
 const ATTACKS := {
@@ -36,7 +45,13 @@ static var focus := Vector3.ZERO
 
 
 var faction := Faction.INDEPENDENT
+## Team number (see TeamSetup), or -1 for none (independents, security).
+var team_id := -1
 var display_name := "Member"
+## Where they come back after a knockout; not finite = get back up where they fell.
+var home := Vector3.INF
+## Seconds of protection left after being reborn.
+var shield := 0.0
 var max_health := 50.0
 var health := 50.0
 var move_speed := 3.0
@@ -76,6 +91,10 @@ var _rig: Node3D
 var _hips: Node3D
 var _head: Node3D
 var _hold: Node3D
+## Right-hand grip for one-handed items, in the fist of the right forearm.
+var _hand_hold: Node3D
+## The last throw was a one-armed toss (the throw pose plays on the right arm only).
+var _throw_one_hand := false
 var _shoulders: Array[Node3D] = []
 var _elbows: Array[Node3D] = []
 var _legs: Array[Node3D] = []
@@ -190,6 +209,12 @@ func build_body(suit: Color, tie: Color, skin: Color, hair: Color, cap := false,
 		_legs.append(hip)
 		_knees.append(knee)
 	_commit_parts()
+	# At the fist of the right forearm, turned back so that at the carry pose its +Y is up
+	# and -Z forward; unscaled so items keep their size on big or small people.
+	_hand_hold = Node3D.new()
+	_hand_hold.transform = Transform3D(Basis(Vector3.RIGHT, -(HAND_ARM + HAND_ELBOW)).scaled(Vector3.ONE / body_scale),
+		Vector3(0.0, -0.31, 0.0))
+	_elbows[1].add_child(_hand_hold)
 
 	var box := func(x: float, y: float, z: float) -> Shape3D:
 		var b := BoxShape3D.new()
@@ -309,6 +334,13 @@ func is_attacking() -> bool:
 
 
 func take_hit(damage: float, knock: Vector3, knockdown: bool, attacker: Node, kind: String) -> void:
+	# Punches, kicks, thrown items and thrown bodies all land here: the player only
+	# trades blows with the rival bloc.
+	var by := attacker as Brawler
+	if by != null and by != self and not may_hurt(by, self):
+		return
+	if shield > 0.0 and not down:
+		return
 	if down:
 		# Kicking someone who is already down just shoves the ragdoll around.
 		if _torso != null:
@@ -345,12 +377,32 @@ func _knock_down(attacker: Node) -> void:
 
 
 func _get_up() -> void:
+	var knocked_out := health <= 0.0
 	_end_ragdoll()
 	down = false
-	if health <= 0.0:
-		health = max_health * 0.5
+	if knocked_out:
+		_rebirth()
 	_apply_collision()
 	_on_got_up()
+	if knocked_out:
+		reborn.emit(self)
+
+
+## Back from a knockout: full health, standing at home (if they have one) and briefly
+## untouchable.
+func _rebirth() -> void:
+	health = max_health
+	shield = REBORN_SHIELD
+	last_attacker = null
+	if not home.is_finite():
+		return
+	global_position = home
+	velocity = Vector3.ZERO
+	# Appear on their feet rather than playing the get-up from the floor.
+	_recover = 0.0
+	_rig.rotation.x = 0.0
+	_rig.position = Vector3.ZERO
+	reset_physics_interpolation()
 
 
 ## Keeps a downed brawler down (e.g. after the player is ejected).
@@ -515,9 +567,19 @@ func try_grab() -> bool:
 		if too_heavy != null:
 			lift_failed.emit(too_heavy)
 		return false
-	best.pick_up(self, _hold)
+	best.pick_up(self, hold_point(best))
 	held_prop = best
 	return true
+
+
+## Where a picked-up item attaches: the right fist for small items, else overhead.
+func hold_point(prop: ThrowableProp) -> Node3D:
+	return _hand_hold if prop.one_hand and _hand_hold != null else _hold
+
+
+## Carrying a small item in one hand (the other arm stays free).
+func is_holding_one_hand() -> bool:
+	return held_body == null and held_prop != null and held_prop.one_hand
 
 
 func is_holding() -> bool:
@@ -533,10 +595,12 @@ func throw_held(dir: Vector3) -> void:
 		# From over the head a body needs a flat, slightly downward heave to plough into
 		# people instead of sailing over them.
 		var flat := Vector3(dir.x, clampf(dir.y, -0.3, -0.05), dir.z).normalized()
+		_throw_one_hand = false
 		body.end_carry(flat * 10.0 + Vector3.UP * 0.3, self)
 	elif held_prop != null:
 		var prop := held_prop
 		held_prop = null
+		_throw_one_hand = prop.one_hand
 		prop.throw(dir, prop.throw_speed * throw_power, self)
 	else:
 		return
@@ -715,6 +779,7 @@ func _physics_process(delta: float) -> void:
 
 func _tick(delta: float) -> void:
 	_stagger = maxf(0.0, _stagger - delta)
+	shield = maxf(0.0, shield - delta)
 	if _attack != "":
 		var a: Dictionary = ATTACKS[_attack]
 		_attack_t += delta
@@ -818,7 +883,10 @@ func _animate(delta: float) -> void:
 		if gesturing:
 			arm[1] = 1.3 + sin(_time * 2.3) * 0.35
 			elbow[1] = 0.9
-		if is_holding():
+		if is_holding_one_hand():
+			arm[1] = HAND_ARM
+			elbow[1] = HAND_ELBOW
+		elif is_holding():
 			arm = [2.9, 2.9]
 			elbow = [0.3, 0.3]
 		if _attack != "":
@@ -865,6 +933,11 @@ func _attack_pose(kind: String, p: float, arm: Array, elbow: Array, leg: Array, 
 			knee[1] = -1.4 if wind else (-0.05 if hit else -0.6)
 			arm[0] = 0.6
 			arm[1] = -0.3
+		"throw" when _throw_one_hand:
+			# Overarm toss with the right hand: cocked back by the ear, then whipped forward.
+			var f := clampf((p - 0.35) / 0.65, 0.0, 1.0)
+			arm[1] = lerpf(2.7, 1.2, f)
+			elbow[1] = lerpf(1.6, 0.15, f)
 		"throw":
 			arm[0] = lerpf(2.9, 1.0, p)
 			arm[1] = arm[0]
@@ -884,6 +957,19 @@ func in_combat() -> bool:
 
 
 func _can_hit(_other: Brawler) -> bool:
+	return true
+
+
+## On different teams (see TeamSetup). Independents and security are on none.
+static func rival_teams(a: Brawler, b: Brawler) -> bool:
+	return a.team_id >= 0 and b.team_id >= 0 and a.team_id != b.team_id
+
+
+## Whether a hit from `attacker` counts on `victim`. The player and rival teams are
+## the only ones who can hurt each other; NPC-on-NPC brawling is unrestricted.
+static func may_hurt(attacker: Brawler, victim: Brawler) -> bool:
+	if attacker is PlayerBrawler or victim is PlayerBrawler:
+		return rival_teams(attacker, victim)
 	return true
 
 

@@ -1,10 +1,10 @@
 extends Node3D
 ## Riot game mode: throw the first punch, keep the chamber in uproar and rack up chaos
-## points before the session clock runs out, while security tries to remove you.
+## points before the session clock runs out. Anyone knocked out (the player included)
+## is reborn a few seconds later; only the clock ends the session.
 ## Debug capture: Godot --path . -- --shot=<file.png>  (starts the riot by itself)
 
 const SESSION_TIME := 180.0
-const MP_COUNT := 72
 const MAX_GUARDS := 8
 ## Points for landing a thrown item (before the combo multiplier). Base points also
 ## count as XP toward the next level.
@@ -34,6 +34,8 @@ var over := false
 var knockouts := 0
 var throw_hits := 0
 var bounties := 0
+## How many times the player was knocked out (and reborn) this session.
+var times_out := 0
 var bounty: NpcBrawler
 
 var _mult_left := 0.0
@@ -42,6 +44,9 @@ var _guard_timer := 6.0
 var _heavy_msg_cd := 0.0
 var _skills: SkillPanel
 var _pause: PauseMenu
+## Team setup the seated MPs were spawned with, and when to re-seat after a change.
+var _spawned_teams := ""
+var _respawn_at := 0
 
 
 func _ready() -> void:
@@ -54,10 +59,13 @@ func _ready() -> void:
 		var touch := TouchControls.new()
 		touch.game = self
 		add_child(touch)
+	TeamSetup.ensure_loaded()
+	TeamSetup.seats = chamber.seat_transforms.size()
+	TeamSetup.clamp_all()
 	_spawn_members()
-	# Pick a character first, unless there is nothing to pick from, it was already picked
+	# Pick a character and set up the teams first, unless that was already done
 	# (restarting with R keeps it) or this is a debug capture.
-	if CharacterRoster.list().size() > 1 and not CharacterRoster.has_selected and _shot_path() == "":
+	if not CharacterRoster.has_selected and _shot_path() == "":
 		hud.visible = false
 		var select := CharacterSelect.new()
 		select.chosen.connect(_begin)
@@ -67,6 +75,7 @@ func _ready() -> void:
 
 
 func _begin(character_path: String) -> void:
+	_respawn_members()
 	hud.visible = true
 	_spawn_player(character_path)
 	hud.show_message("The session is in order. For now.\nThrow the first punch.", 6.0)
@@ -135,41 +144,81 @@ func _bake_navigation() -> void:
 	print_verbose("navigation baked in %d ms" % (Time.get_ticks_msec() - t0))
 
 
+## Seats every team's MPs (TeamSetup: team count and members per team, the player being
+## one member of their own team) in its own wedge of the chamber, spread evenly through
+## it; the speaker at the tribune is one of a random team's members. The presidium is
+## independent.
 func _spawn_members() -> void:
+	TeamSetup.ensure_loaded()
+	# Seats ordered around the hemicycle, so consecutive runs make wedges.
 	var seats := chamber.seat_transforms.duplicate()
-	seats.shuffle()
-	for i in mini(MP_COUNT, seats.size()):
-		var xf: Transform3D = seats[i]
-		var fac := Brawler.Faction.VELVET if xf.origin.x < 0.0 else Brawler.Faction.IRON
-		if randf() < 0.15:
-			fac = Brawler.Faction.INDEPENDENT
-		var mp := _make_member(fac)
-		mp.seat_at(xf)
-		_add_npc(mp)
+	seats.sort_custom(func(a: Transform3D, b: Transform3D) -> bool:
+		return atan2(a.origin.x, a.origin.z) < atan2(b.origin.x, b.origin.z))
+	var teams := TeamSetup.count
+	var speaker_team := randi() % teams
+	var span := float(seats.size()) / teams
+	for t in teams:
+		var n := TeamSetup.members
+		if t == TeamSetup.player_team:
+			n -= 1
+		var seated := n - (1 if t == speaker_team and n > 0 else 0)
+		var first := int(round(t * span))
+		var room := int(round((t + 1) * span)) - first
+		seated = mini(seated, room)
+		for i in seated:
+			var mp := _make_member(t)
+			mp.seat_at(seats[first + int((i + 0.5) * room / seated)])
+			_add_npc(mp)
 	for i in mini(3, chamber.presidium_seat_transforms.size()):
-		var chair := _make_member(Brawler.Faction.INDEPENDENT)
+		var chair := _make_member(-1)
 		chair.aggression = 0.3
 		chair.seat_at(chamber.presidium_seat_transforms[i])
 		_add_npc(chair)
-	var speaker := _make_member(Brawler.Faction.VELVET if randf() < 0.5 else Brawler.Faction.IRON)
-	speaker.state = NpcBrawler.State.SPEAK
-	speaker.gesturing = true
-	speaker.transform = Transform3D(Basis(Vector3.UP, PI), chamber.tribune_transform.origin + Vector3(0.0, 0.05, -0.6))
-	_add_npc(speaker)
+	# Only if the speaker's team has a member left over (a 1-member team is just the player).
+	var speaker_n := TeamSetup.members - (1 if speaker_team == TeamSetup.player_team else 0)
+	if speaker_n > 0:
+		var speaker := _make_member(speaker_team)
+		speaker.state = NpcBrawler.State.SPEAK
+		speaker.gesturing = true
+		speaker.transform = Transform3D(Basis(Vector3.UP, PI), chamber.tribune_transform.origin + Vector3(0.0, 0.05, -0.6))
+		speaker.home = speaker.position
+		_add_npc(speaker)
+	_spawned_teams = _team_signature()
 
 
-func _make_member(fac: Brawler.Faction) -> NpcBrawler:
+func _team_signature() -> String:
+	return "%d/%d/%d" % [TeamSetup.count, TeamSetup.members, TeamSetup.player_team]
+
+
+## The select screen changed the teams: re-seat the chamber shortly after (so clicking
+## through the numbers doesn't rebuild it on every click).
+func preview_teams() -> void:
+	_respawn_at = Time.get_ticks_msec() + 300
+
+
+func _respawn_members() -> void:
+	_respawn_at = 0
+	if _team_signature() == _spawned_teams:
+		return
+	for n in npcs:
+		n.queue_free()
+	npcs.clear()
+	bounty = null
+	_spawn_members()
+
+
+## team: a TeamSetup team number, or -1 for an independent.
+func _make_member(team: int) -> NpcBrawler:
 	var mp := NpcBrawler.new()
-	mp.faction = fac
+	mp.team_id = team
+	mp.faction = Brawler.Faction.PARTY if team >= 0 else Brawler.Faction.INDEPENDENT
 	mp.display_name = "%s %s" % [FIRST_NAMES.pick_random(), LAST_NAMES.pick_random()]
-	var suit := Color(0.33, 0.24, 0.16)
-	var tie := Color(0.1, 0.45, 0.25)
-	if fac == Brawler.Faction.VELVET:
-		suit = Color(0.09, 0.12, 0.26)
-		tie = Color(0.7, 0.08, 0.12)
-	elif fac == Brawler.Faction.IRON:
-		suit = Color(0.2, 0.2, 0.22)
-		tie = Color(0.88, 0.62, 0.1)
+	var suit := Color(0.6, 0.56, 0.48)
+	var tie := Color(0.3, 0.3, 0.32)
+	if team >= 0:
+		var style := TeamSetup.style(team)
+		suit = style.suit
+		tie = style.tie
 	mp.build_body(suit.lightened(randf() * 0.12), tie, SKIN.pick_random(), HAIR.pick_random(), false, randf_range(0.93, 1.07))
 	mp.aggression = randf_range(0.35, 0.95)
 	mp.max_health = 45.0
@@ -204,10 +253,16 @@ func _add_npc(npc: NpcBrawler) -> void:
 
 func _spawn_player(character_path := "") -> void:
 	player = PlayerBrawler.new()
+	player.team_id = TeamSetup.player_team
 	CharacterRoster.dress(player, character_path)
 	Progression.apply_to(player)
 	player.position = Vector3(0.0, 0.05, 2.6)
+	# Knocked out, the player is reborn where they started.
+	player.home = player.position
 	add_child(player)
+	player.reborn.connect(func(_who: Brawler) -> void:
+		if not over:
+			hud.show_message("BACK IN THE CHAMBER!", 1.5))
 	player.hit_landed.connect(_on_hit_landed)
 	player.knocked_down.connect(_on_knocked_down)
 	player.lift_failed.connect(_on_lift_failed)
@@ -219,7 +274,8 @@ func _start_riot() -> void:
 	if riot:
 		return
 	riot = true
-	hud.show_message("ORDER! ORDER!\nThe chamber erupts!", 3.0)
+	hud.show_message("ORDER! ORDER!\nYou stand with %s. Take down %s!" % [TeamSetup.team_name(player.team_id),
+		TeamSetup.list_names(TeamSetup.rivals_of(player.team_id))], 3.0)
 	for n in _members_near(player.global_position, 7.0):
 		n.rouse(0.8)
 
@@ -237,7 +293,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _open_pause() -> void:
 	_pause = PauseMenu.new()
-	_pause.can_change_character = CharacterRoster.list().size() > 1
+	_pause.can_change_character = true
 	_pause.resumed.connect(func() -> void: _pause = null)
 	_pause.skills_requested.connect(_open_skills)
 	_pause.restart_requested.connect(func() -> void:
@@ -292,6 +348,8 @@ func _physics_process(_delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	if _respawn_at > 0 and Time.get_ticks_msec() >= _respawn_at:
+		_respawn_members()
 	if player == null:
 		return
 	_heavy_msg_cd -= delta
@@ -300,7 +358,7 @@ func _process(delta: float) -> void:
 	if over:
 		if Input.is_action_just_pressed("restart"):
 			get_tree().reload_current_scene()
-		elif Input.is_action_just_pressed("change_character") and CharacterRoster.list().size() > 1:
+		elif Input.is_action_just_pressed("change_character"):
 			CharacterRoster.has_selected = false
 			get_tree().reload_current_scene()
 		return
@@ -361,7 +419,8 @@ func _update_bounty() -> void:
 			bounty.set_bounty(false)
 		bounty = null
 	if bounty == null:
-		var candidates := npcs.filter(func(n): return not n.is_guard and not n.down)
+		# Only the rival bloc can be beaten, so only they carry a bounty.
+		var candidates := npcs.filter(func(n): return not n.down and Brawler.rival_teams(player, n))
 		if not candidates.is_empty():
 			bounty = candidates.pick_random()
 			bounty.set_bounty(true)
@@ -408,8 +467,11 @@ func _on_knocked_down(victim: Brawler, attacker: Node) -> void:
 	if over:
 		return
 	if victim == player:
+		# Knocked out costs the combo, not the session: the player is reborn shortly.
 		if player.health <= 0.0:
-			_end("EJECTED FROM THE CHAMBER")
+			times_out += 1
+			multiplier = 1
+			hud.show_message("KNOCKED OUT!\nYou'll be back in a few seconds", 3.0)
 		return
 	var npc := victim as NpcBrawler
 	if attacker == player:
@@ -420,7 +482,9 @@ func _on_knocked_down(victim: Brawler, attacker: Node) -> void:
 			bounties += 1
 			_add_score(500, "BOUNTY CLAIMED  +20s")
 			time_left += 20.0
+	# Guards aren't reborn: they're carried out, and fresh ones come in through the doors.
 	if npc.is_guard and npc.health <= 0.0:
+		npc.stay_down()
 		npcs.erase(npc)
 		get_tree().create_timer(5.0).timeout.connect(npc.queue_free)
 
@@ -458,7 +522,7 @@ func _end(title: String) -> void:
 	var career := "\n\nSession bonus  +%d XP   ·   Level %d" % [bonus, Progression.level]
 	if Progression.level > before:
 		career += "  (LEVEL UP!)"
-	hud.show_results(title, "Chaos score  %d\nKnockdowns  %d\nThrow hits  %d\nBounties  %d\n\nRank: %s%s" % [score, knockouts, throw_hits, bounties, rank, career], CharacterRoster.list().size() > 1)
+	hud.show_results(title, "Chaos score  %d\nKnockdowns  %d\nThrow hits  %d\nBounties  %d\nKnocked out  %d\n\nRank: %s%s" % [score, knockouts, throw_hits, bounties, times_out, rank, career], true)
 
 
 # --- Helpers -------------------------------------------------------------------
@@ -478,11 +542,19 @@ func _shot_path() -> String:
 func _capture(path: String) -> void:
 	for i in 30:
 		await get_tree().process_frame
+	# The debug tests use teams 0 and 1 with the player on team 0, whatever was saved.
+	player.team_id = 0
 	if OS.get_cmdline_user_args().has("--ragtest"):
 		await _ragdoll_test(path)
 		return
 	if OS.get_cmdline_user_args().has("--proptest"):
 		await _prop_test(path)
+		return
+	if OS.get_cmdline_user_args().has("--reborntest"):
+		await _reborn_test()
+		return
+	if OS.get_cmdline_user_args().has("--teamtest"):
+		await _team_test()
 		return
 	if OS.get_cmdline_user_args().has("--bodytest"):
 		await _body_test(path)
@@ -500,6 +572,71 @@ func _capture(path: String) -> void:
 	get_tree().quit()
 
 
+## Debug: knocks out the player and a seated rival MP, waits, and prints whether both
+## were reborn at full health at home, shielded, without ending the session.
+func _reborn_test() -> void:
+	var rival: NpcBrawler
+	for n in npcs:
+		if n.team_id == 1 and n.home.is_finite():
+			rival = n
+			break
+	rival.stand_up()
+	var mp_home := rival.home
+	var mp_reborn_at := [Vector3.INF]
+	rival.reborn.connect(func(b: Brawler) -> void: mp_reborn_at[0] = b.global_position)
+	player.global_position = Vector3(3.0, 0.05, 0.0)
+	for i in 5:
+		await get_tree().physics_frame
+	player.take_hit(1e6, Vector3(0.0, 0.0, 3.0), true, rival, "kick")
+	rival.take_hit(1e6, Vector3(0.0, 0.0, -3.0), true, player, "kick")
+	print("REBORNTEST knocked player_down=%s mp_down=%s over=%s" % [player.down, rival.down, over])
+	var came_back := false
+	for i in 400:
+		await get_tree().physics_frame
+		if not player.down and not rival.down:
+			came_back = true
+			break
+	print("REBORNTEST back=%s over=%s player_hp=%.0f/%.0f at_home=%s mp_hp=%.0f/%.0f mp_at_home=%s times_out=%d" % [
+		came_back, over, player.health, player.max_health, player.global_position.distance_to(player.home) < 0.5,
+		rival.health, rival.max_health, (mp_reborn_at[0] as Vector3).distance_to(mp_home) < 0.5, times_out])
+	var hp := player.health
+	player.take_hit(10.0, Vector3.ZERO, false, rival, "punch1")
+	var shielded := player.health == hp
+	for i in 70:
+		await get_tree().physics_frame
+	player.take_hit(10.0, Vector3.ZERO, false, rival, "punch1")
+	print("REBORNTEST shielded=%s hurt_after_shield=%s" % [shielded, player.health < hp])
+	get_viewport().get_texture().get_image().save_png(_shot_path())
+	get_tree().quit()
+
+
+## Debug: checks who can hurt whom (player vs teammate, rival, independent, guard) and
+## who picks the player as a target. Prints TEAMTEST lines.
+func _team_test() -> void:
+	player.max_health = 1e6
+	player.health = 1e6
+	var others := {"teammate": _make_member(0), "rival": _make_member(1),
+		"independent": _make_member(-1), "guard": _make_guard(Vector3(4.0, 0.05, 4.0))}
+	var x := -1.5
+	for key in others:
+		var n: NpcBrawler = others[key]
+		if not n.is_guard:
+			n.position = Vector3(x, 0.05, -1.0)
+		x += 1.0
+		_add_npc(n)
+	for i in 5:
+		await get_tree().physics_frame
+	for key in others:
+		var n: NpcBrawler = others[key]
+		var hp := n.health
+		n.take_hit(5.0, Vector3.ZERO, false, player, "punch1")
+		var php := player.health
+		player.take_hit(5.0, Vector3.ZERO, false, n, "punch1")
+		print("TEAMTEST %s player_hurts_it=%s it_hurts_player=%s targets_player=%s" % [key, n.health < hp,
+			player.health < php, n._is_rival(player)])
+	get_tree().quit()
+
+
 ## Debug: knock an MP out, pick them up (<path>_held.png), throw them into two more MPs
 ## (<path>_thrown.png) and print what the throw hit.
 func _body_test(path: String) -> void:
@@ -507,7 +644,7 @@ func _body_test(path: String) -> void:
 	player.health = 1e6
 	player.global_position = Vector3(2.6, 0.05, 1.2)
 	player.rotation.y = PI * 0.5
-	var victim := _make_member(Brawler.Faction.VELVET)
+	var victim := _make_member(0)
 	victim.position = Vector3(1.8, 0.05, 1.2)
 	_add_npc(victim)
 	for i in 8:
@@ -522,7 +659,7 @@ func _body_test(path: String) -> void:
 	var grabbed := player.try_grab_body()
 	var targets: Array[NpcBrawler] = []
 	for z in [0.9, 1.5]:
-		var t := _make_member(Brawler.Faction.IRON)
+		var t := _make_member(1)
 		t.position = Vector3(-0.8, 0.05, z)
 		_add_npc(t)
 		targets.append(t)
@@ -549,7 +686,7 @@ func _body_test(path: String) -> void:
 func _prop_test(path: String) -> void:
 	player.max_health = 1e6
 	player.health = 1e6
-	for kind in ["monitor", "bottle", "plant"]:
+	for kind in ["monitor", "bottle", "mic", "paper", "plant"]:
 		var pick: ThrowableProp
 		for node in get_tree().get_nodes_in_group("props"):
 			var p := node as ThrowableProp
@@ -560,10 +697,10 @@ func _prop_test(path: String) -> void:
 		player.rotation.y = PI * 0.5
 		for i in 10:
 			await get_tree().physics_frame
-		pick.pick_up(player, player._hold)
+		pick.pick_up(player, player.hold_point(pick))
 		player.held_prop = pick
 		var grabbed := pick.holder == player
-		var target := _make_member(Brawler.Faction.IRON)
+		var target := _make_member(1)
 		target.position = Vector3(-0.6, 0.05, 1.2)
 		_add_npc(target)
 		for i in 15:
@@ -583,7 +720,7 @@ func _prop_test(path: String) -> void:
 func _ragdoll_test(path: String) -> void:
 	var victims: Array[NpcBrawler] = []
 	for i in 4:
-		var mp := _make_member(Brawler.Faction.VELVET if i % 2 == 0 else Brawler.Faction.IRON)
+		var mp := _make_member(i % 2)
 		mp.position = Vector3(-1.5 + i, 0.05, 0.4)
 		_add_npc(mp)
 		victims.append(mp)
@@ -591,7 +728,7 @@ func _ragdoll_test(path: String) -> void:
 		await get_tree().physics_frame
 	for i in victims.size():
 		var push := Vector3(randf_range(-2.0, 2.0), 0.0, -6.0 if i % 2 == 0 else 5.0)
-		victims[i].take_hit(5.0, push, true, player, "kick")
+		victims[i].take_hit(5.0, push, true, null, "kick")
 	var base := path.trim_suffix(".png")
 	# Wait (in physics frames) before each capture: mid-fall, at rest, back on their feet.
 	for step in [["a", 12], ["b", 80], ["c", 200]]:
