@@ -1,11 +1,12 @@
 extends Node3D
 ## Riot game mode: throw the first punch, keep the chamber in uproar and rack up chaos
-## points before the session clock runs out. Anyone knocked out (the player included)
-## is reborn a few seconds later; only the clock ends the session.
+## points before the session clock runs out. The session ends when the player is knocked
+## out (health 0), when the player has personally knocked out every rival-team member
+## (those stay out for good), or when the clock runs out. Anyone knocked out by someone
+## else is reborn, so teammates can wear rivals down but only the player finishes them.
 ## Debug capture: Godot --path . -- --shot=<file.png>  (starts the riot by itself)
 
 const SESSION_TIME := 180.0
-const MAX_GUARDS := 8
 ## Points for landing a thrown item (before the combo multiplier). Base points also
 ## count as XP toward the next level.
 const THROW_POINTS := {"body": 100, "chair": 75, "monitor": 60, "plant": 60, "bottle": 25,
@@ -47,6 +48,8 @@ var _pause: PauseMenu
 ## Team setup the seated MPs were spawned with, and when to re-seat after a change.
 var _spawned_teams := ""
 var _respawn_at := 0
+## Rivals the player has knocked out for good (NpcBrawler -> true).
+var _eliminated := {}
 
 
 func _ready() -> void:
@@ -76,6 +79,9 @@ func _ready() -> void:
 
 func _begin(character_path: String) -> void:
 	_respawn_members()
+	# The MPs were seated before the difficulty was picked: scale them now.
+	for n in npcs:
+		_apply_difficulty(n)
 	hud.visible = true
 	_spawn_player(character_path)
 	hud.show_message("The session is in order. For now.\nThrow the first punch.", 6.0)
@@ -144,10 +150,10 @@ func _bake_navigation() -> void:
 	print_verbose("navigation baked in %d ms" % (Time.get_ticks_msec() - t0))
 
 
-## Seats every team's MPs (TeamSetup: team count and members per team, the player being
-## one member of their own team) in its own wedge of the chamber, spread evenly through
-## it; the speaker at the tribune is one of a random team's members. The presidium is
-## independent.
+## Seats every team's MPs (TeamSetup: team count and each team's own size, the player
+## being one member of their own team) in its own wedge of the chamber, sized to the
+## team and spread evenly through it; the speaker at the tribune is one of a random
+## team's members. The presidium is independent.
 func _spawn_members() -> void:
 	TeamSetup.ensure_loaded()
 	# Seats ordered around the hemicycle, so consecutive runs make wedges.
@@ -155,28 +161,39 @@ func _spawn_members() -> void:
 	seats.sort_custom(func(a: Transform3D, b: Transform3D) -> bool:
 		return atan2(a.origin.x, a.origin.z) < atan2(b.origin.x, b.origin.z))
 	var teams := TeamSetup.count
-	var speaker_team := randi() % teams
-	var span := float(seats.size()) / teams
+	# NPC members per team (the player isn't one), and a speaker from a team that has any.
+	var npc_count: Array[int] = []
+	var with_npcs: Array[int] = []
 	for t in teams:
-		var n := TeamSetup.members
-		if t == TeamSetup.player_team:
-			n -= 1
-		var seated := n - (1 if t == speaker_team and n > 0 else 0)
-		var first := int(round(t * span))
-		var room := int(round((t + 1) * span)) - first
-		seated = mini(seated, room)
-		for i in seated:
+		npc_count.append(TeamSetup.members_of(t) - (1 if t == TeamSetup.player_team else 0))
+		if npc_count[t] > 0:
+			with_npcs.append(t)
+	var speaker_team: int = with_npcs.pick_random() if not with_npcs.is_empty() else -1
+	var seated: Array[int] = []
+	var total := 0
+	for t in teams:
+		seated.append(npc_count[t] - (1 if t == speaker_team else 0))
+		total += seated[t]
+	# Each wedge holds its team plus a share of the empty seats, in proportion to its size.
+	var spare := maxi(0, seats.size() - total)
+	var first := 0
+	for t in teams:
+		var room := seated[t] + (int(spare * seated[t] / maxi(1, total)))
+		if t == teams - 1:
+			room = seats.size() - first
+		var n := mini(seated[t], room)
+		for i in n:
 			var mp := _make_member(t)
-			mp.seat_at(seats[first + int((i + 0.5) * room / seated)])
+			mp.seat_at(seats[first + int((i + 0.5) * room / n)])
 			_add_npc(mp)
+		first += room
 	for i in mini(3, chamber.presidium_seat_transforms.size()):
 		var chair := _make_member(-1)
 		chair.aggression = 0.3
 		chair.seat_at(chamber.presidium_seat_transforms[i])
 		_add_npc(chair)
-	# Only if the speaker's team has a member left over (a 1-member team is just the player).
-	var speaker_n := TeamSetup.members - (1 if speaker_team == TeamSetup.player_team else 0)
-	if speaker_n > 0:
+	# Only if some team has a member besides the player (a 1-member team is just the player).
+	if speaker_team >= 0:
 		var speaker := _make_member(speaker_team)
 		speaker.state = NpcBrawler.State.SPEAK
 		speaker.gesturing = true
@@ -187,7 +204,7 @@ func _spawn_members() -> void:
 
 
 func _team_signature() -> String:
-	return "%d/%d/%d" % [TeamSetup.count, TeamSetup.members, TeamSetup.player_team]
+	return "%d/%s/%d" % [TeamSetup.count, str(TeamSetup.sizes.slice(0, TeamSetup.count)), TeamSetup.player_team]
 
 
 ## The select screen changed the teams: re-seat the chamber shortly after (so clicking
@@ -241,7 +258,19 @@ func _make_guard(pos: Vector3) -> NpcBrawler:
 	g.base_damage = 9.0
 	g.position = pos
 	g.state = NpcBrawler.State.FIGHT
+	_apply_difficulty(g)
 	return g
+
+
+## Scales an MP's or guard's toughness, hitting power, speed and temper by the
+## difficulty (TeamSetup.DIFFICULTIES). Applied once per NPC, to its base stats.
+func _apply_difficulty(npc: NpcBrawler) -> void:
+	var d := TeamSetup.diff()
+	npc.max_health *= d.health
+	npc.health = npc.max_health
+	npc.base_damage *= d.damage
+	npc.move_speed *= d.speed
+	npc.aggression = clampf(npc.aggression + d.aggression, 0.05, 1.0)
 
 
 func _add_npc(npc: NpcBrawler) -> void:
@@ -367,6 +396,15 @@ func _process(delta: float) -> void:
 		if time_left <= 0.0:
 			_end("SESSION ADJOURNED")
 			return
+	# Health 0: the session is over (no rebirth for the player).
+	if player.down and player.health <= 0.0:
+		times_out += 1
+		_end("YOU WERE KNOCKED OUT")
+		return
+	if riot and _rivals_left() == 0:
+		_end("RIVALS DEFEATED")
+		return
+	if riot:
 		_mult_left -= delta
 		if _mult_left <= 0.0:
 			multiplier = 1
@@ -378,6 +416,10 @@ func _process(delta: float) -> void:
 		_update_guards(delta)
 		_update_bounty()
 	var bounty_text := "BOUNTY: Hon. %s  +500" % bounty.display_name if bounty else ""
+	if riot:
+		var left := _rivals_left()
+		if left > 0:
+			bounty_text = ("RIVALS LEFT: %d" % left) + ("\n" + bounty_text if bounty_text != "" else "")
 	hud.update_stats(score, multiplier, time_left, riot, chaos, player.health / player.max_health, bounty_text)
 
 
@@ -399,12 +441,12 @@ func _update_guards(delta: float) -> void:
 	_guard_timer -= delta
 	if _guard_timer > 0.0:
 		return
-	_guard_timer = lerpf(20.0, 10.0, chaos / 100.0)
+	_guard_timer = lerpf(20.0, 10.0, chaos / 100.0) * TeamSetup.diff().guard_wait
 	var alive := 0
 	for n in npcs:
 		if n.is_guard:
 			alive += 1
-	var count := mini(2, MAX_GUARDS - alive)
+	var count := mini(2, int(TeamSetup.diff().guards) - alive)
 	if count <= 0:
 		return
 	var door: Vector3 = exits.pick_random()
@@ -448,6 +490,8 @@ func _on_hit_landed(attacker: Node, victim: Brawler, _damage: float, kind: Strin
 		return
 	if victim == player:
 		hud.flash_damage()
+	# Kicking a downed rival to 0 counts too (no knockdown signal fires then).
+	_check_eliminated(victim, attacker)
 	if attacker == player:
 		_start_riot()
 		player.shake(0.12)
@@ -467,12 +511,8 @@ func _on_knocked_down(victim: Brawler, attacker: Node) -> void:
 	if over:
 		return
 	if victim == player:
-		# Knocked out costs the combo, not the session: the player is reborn shortly.
-		if player.health <= 0.0:
-			times_out += 1
-			multiplier = 1
-			hud.show_message("KNOCKED OUT!\nYou'll be back in a few seconds", 3.0)
 		return
+	_check_eliminated(victim, attacker)
 	var npc := victim as NpcBrawler
 	if attacker == player:
 		knockouts += 1
@@ -487,6 +527,34 @@ func _on_knocked_down(victim: Brawler, attacker: Node) -> void:
 		npc.stay_down()
 		npcs.erase(npc)
 		get_tree().create_timer(5.0).timeout.connect(npc.queue_free)
+
+
+## Rival-team MPs not yet eliminated. Only the player eliminates: a rival the player
+## knocks out (health 0) stays down for good, while one knocked out by anyone else is
+## reborn as usual. Returns -1 when there are no rivals at all.
+func _rivals_left() -> int:
+	var total := 0
+	var left := 0
+	for n in npcs:
+		if not is_instance_valid(n) or not Brawler.rival_teams(player, n):
+			continue
+		total += 1
+		if not _eliminated.has(n):
+			left += 1
+	return left if total > 0 else -1
+
+
+## Called on every hit and knockdown by the player: a rival at health 0 is out for good.
+func _check_eliminated(victim: Brawler, attacker: Node) -> void:
+	var npc := victim as NpcBrawler
+	if attacker != player or npc == null or _eliminated.has(npc) or not Brawler.rival_teams(player, npc):
+		return
+	if npc.down and npc.health <= 0.0:
+		_eliminated[npc] = true
+		npc.stay_down()
+		var left := _rivals_left()
+		if left > 0:
+			hud.popup("RIVAL ELIMINATED  ·  %d left" % left)
 
 
 func _add_score(points: int, label := "") -> void:
@@ -516,13 +584,14 @@ func _end(title: String) -> void:
 		rank = "Agitator"
 	# Finishing a session pays a bonus by rank; the multiplier never counts toward XP.
 	var bonus := {"Backbencher": 40, "Agitator": 100, "Firebrand": 200, "Legend of the Chamber": 350}[rank] as int
+	bonus = int(bonus * TeamSetup.diff().xp)
 	var before := Progression.level
 	Progression.add_xp(int(bonus * (1.0 + 0.05 * Progression.get_skill("charisma"))))
 	Progression.save()
 	var career := "\n\nSession bonus  +%d XP   ·   Level %d" % [bonus, Progression.level]
 	if Progression.level > before:
 		career += "  (LEVEL UP!)"
-	hud.show_results(title, "Chaos score  %d\nKnockdowns  %d\nThrow hits  %d\nBounties  %d\nKnocked out  %d\n\nRank: %s%s" % [score, knockouts, throw_hits, bounties, times_out, rank, career], true)
+	hud.show_results(title, "Chaos score  %d\nKnockdowns  %d\nThrow hits  %d\nBounties  %d\nKnocked out  %d\n\nDifficulty: %s   ·   Rank: %s%s" % [score, knockouts, throw_hits, bounties, times_out, TeamSetup.diff().name, rank, career], true)
 
 
 # --- Helpers -------------------------------------------------------------------

@@ -132,13 +132,7 @@ func _make_materials() -> void:
 	vote.albedo_texture = _vote_texture()
 	_m.vote = vote
 
-	var stripes := Image.create(1, 3, false, Image.FORMAT_RGBA8)
-	stripes.set_pixel(0, 0, Color(0.85, 0.07, 0.12))
-	stripes.set_pixel(0, 1, Color(0.0, 0.2, 0.63))
-	stripes.set_pixel(0, 2, Color(0.95, 0.66, 0.0))
-	var flag := _mat(Color.WHITE, 0.85)
-	flag.albedo_texture = ImageTexture.create_from_image(stripes)
-	flag.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	var flag := _mat(Color(0.92, 0.91, 0.88), 0.85)
 	flag.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_m.flag = flag
 
@@ -549,7 +543,7 @@ func _flag(base: Vector3) -> void:
 		_part(_cm(0.14, 0.18, 0.08), _m.gold, Vector3(0.0, 0.04, 0.0)),
 	]
 
-	# Gently drooping cloth: a rippled grid, red/blue/orange stripes top to bottom.
+	# Gently drooping cloth: a rippled grid of plain, unmarked cloth.
 	var cols := 18
 	var rows := 3
 	var grid := []

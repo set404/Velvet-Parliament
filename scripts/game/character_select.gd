@@ -4,7 +4,7 @@ extends Node3D
 ## The candidate stands on the floor (same body, animation and skin as in play) and turns
 ## slowly; drag with the mouse to spin them yourself.
 ## A / D or arrows (or the buttons) browse, Enter / Space / the button takes the seat.
-## The team panel on the left sets how many teams there are, how many members each has,
+## The panel on the left sets the difficulty, how many teams there are, how many members each has,
 ## their names, and which one the player joins (W / S cycles it); see TeamSetup.
 
 signal chosen(path: String)
@@ -33,7 +33,9 @@ var _team_limits: Label
 var _team_rows: Array[HBoxContainer] = []
 var _team_buttons: Array[Button] = []
 var _team_edits: Array[LineEdit] = []
+var _team_sizes: Array[Label] = []
 var _team_hint: Label
+var _difficulty: Label
 
 
 func _ready() -> void:
@@ -254,7 +256,7 @@ func _build_team_panel(root: Control) -> void:
 	frame.anchor_top = 0.0
 	frame.anchor_bottom = 0.0
 	frame.offset_left = 16
-	frame.offset_right = 268
+	frame.offset_right = 300
 	frame.offset_top = 114
 	# Below the title lines and left of the name bar, even with all six teams listed.
 	var bg := StyleBoxFlat.new()
@@ -269,14 +271,20 @@ func _build_team_panel(root: Control) -> void:
 	box.add_theme_constant_override("separation", 5)
 	frame.add_child(box)
 
+	_difficulty = _stepper(box, "Difficulty", func(d: int) -> void:
+		TeamSetup.set_difficulty(wrapi(TeamSetup.difficulty + d, 0, TeamSetup.DIFFICULTIES.size()))
+		_refresh_teams()
+		TeamSetup.save())
+	_difficulty.custom_minimum_size = Vector2(76, 0)
 	var head := _plain_label(17, GOLD)
 	head.text = "TEAMS"
 	box.add_child(head)
 	_team_count = _stepper(box, "Teams", func(d: int) -> void:
 		TeamSetup.set_count(TeamSetup.count + d)
 		_teams_changed())
-	_team_size = _stepper(box, "Members", func(d: int) -> void:
-		TeamSetup.set_members(TeamSetup.members + d)
+	# Sets every team to the same size; each team's own ◀ ▶ fine-tunes it.
+	_team_size = _stepper(box, "All teams", func(d: int) -> void:
+		TeamSetup.set_all_members(TeamSetup.sizes[TeamSetup.player_team] + d)
 		_teams_changed(), true)
 	_team_limits = _plain_label(11, TEXT)
 	_team_limits.modulate.a = 0.7
@@ -284,7 +292,7 @@ func _build_team_panel(root: Control) -> void:
 
 	for i in TeamSetup.MAX_TEAMS:
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
+		row.add_theme_constant_override("separation", 4)
 		box.add_child(row)
 		var join := _button("JOIN", 12)
 		join.custom_minimum_size = Vector2(58, 32)
@@ -323,6 +331,16 @@ func _build_team_panel(root: Control) -> void:
 			edit.release_focus())
 		edit.focus_exited.connect(settle)
 		row.add_child(edit)
+		var resize := func(d: int) -> void:
+			TeamSetup.set_members(team, TeamSetup.sizes[team] + d)
+			_teams_changed()
+		row.add_child(_step_button("◀", resize, -1))
+		var size_label := _plain_label(15, GOLD)
+		size_label.custom_minimum_size = Vector2(26, 0)
+		size_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(size_label)
+		row.add_child(_step_button("▶", resize, 1))
+		_team_sizes.append(size_label)
 		_team_rows.append(row)
 		_team_buttons.append(join)
 		_team_edits.append(edit)
@@ -383,12 +401,20 @@ func _set_team(team: int) -> void:
 
 
 func _refresh_teams() -> void:
+	_difficulty.text = TeamSetup.diff().name
 	_team_count.text = str(TeamSetup.count)
-	_team_size.text = str(TeamSetup.members)
-	_team_limits.text = "%d–%d teams · %d–%d members each\n(you count as one of yours)" % [TeamSetup.MIN_TEAMS,
-		TeamSetup.MAX_TEAMS, TeamSetup.MIN_MEMBERS, TeamSetup.max_members()]
+	var total := 0
+	var same := true
+	for t in TeamSetup.count:
+		total += TeamSetup.sizes[t]
+		same = same and TeamSetup.sizes[t] == TeamSetup.sizes[0]
+	_team_size.text = str(TeamSetup.sizes[0]) if same else "–"
+	_team_limits.text = "%d–%d teams · %d–%d members per team\n%d of %d seats used (you count as one of yours)" % [
+		TeamSetup.MIN_TEAMS, TeamSetup.MAX_TEAMS, TeamSetup.MIN_MEMBERS, TeamSetup.MAX_MEMBERS,
+		total, TeamSetup.total_capacity()]
 	for i in _team_rows.size():
 		_team_rows[i].visible = i < TeamSetup.count
+		_team_sizes[i].text = str(TeamSetup.sizes[i])
 		var on := i == TeamSetup.player_team
 		var b := _team_buttons[i]
 		b.set_pressed_no_signal(on)

@@ -24,8 +24,20 @@ const STYLES := [
 	{"name": "COPPER", "suit": Color(0.36, 0.2, 0.12), "tie": Color(0.95, 0.45, 0.15), "accent": Color(1.0, 0.5, 0.2)},
 ]
 
+## Difficulty levels (index = TeamSetup.difficulty). Multipliers apply to every MP and
+## guard; "guards" is the most security in the chamber at once, "focus" the chance a
+## rival MP picking a fight goes for the player, "xp" scales the end-of-session bonus.
+const DIFFICULTIES := [
+	{"name": "EASY", "health": 0.7, "damage": 0.6, "speed": 0.9, "aggression": -0.15, "guards": 5, "guard_wait": 1.4, "focus": 0.15, "xp": 0.75},
+	{"name": "NORMAL", "health": 1.0, "damage": 1.0, "speed": 1.0, "aggression": 0.0, "guards": 8, "guard_wait": 1.0, "focus": 0.35, "xp": 1.0},
+	{"name": "HARD", "health": 1.4, "damage": 1.5, "speed": 1.12, "aggression": 0.15, "guards": 11, "guard_wait": 0.7, "focus": 0.6, "xp": 1.5},
+]
+
+static var difficulty := 1
 static var count := 2
-static var members := 30
+## Members per team slot (index = team number; only the first `count` are used). The
+## player counts as one member of their own team.
+static var sizes: Array[int] = [30, 30, 30, 30, 30, 30]
 static var player_team := 0
 static var names: Array[String] = []
 ## Member seats in the chamber; set by the game before the select screen opens.
@@ -44,8 +56,13 @@ static func ensure_loaded() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SAVE_PATH) == OK:
 		count = cfg.get_value("teams", "count", count)
-		members = cfg.get_value("teams", "members", members)
+		# Older saves had one size for every team.
+		var legacy: int = cfg.get_value("teams", "members", 30)
+		var saved_sizes: Array = cfg.get_value("teams", "sizes", [])
+		for i in sizes.size():
+			sizes[i] = int(saved_sizes[i]) if i < saved_sizes.size() else legacy
 		player_team = cfg.get_value("teams", "player_team", player_team)
+		difficulty = cfg.get_value("game", "difficulty", difficulty)
 		var saved: Array = cfg.get_value("teams", "names", [])
 		for i in mini(saved.size(), names.size()):
 			names[i] = clean_name(str(saved[i]), i)
@@ -55,22 +72,54 @@ static func ensure_loaded() -> void:
 static func save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("teams", "count", count)
-	cfg.set_value("teams", "members", members)
+	cfg.set_value("teams", "sizes", sizes)
 	cfg.set_value("teams", "player_team", player_team)
 	cfg.set_value("teams", "names", names)
+	cfg.set_value("game", "difficulty", difficulty)
 	cfg.save(SAVE_PATH)
 
 
-## Most members a team can have with `team_count` teams: every NPC needs a seat (the
-## player and the speaker at the tribune don't).
-static func max_members(team_count := count) -> int:
-	return clampi(seats / maxi(1, team_count), MIN_MEMBERS, MAX_MEMBERS)
+## The current difficulty's settings (see DIFFICULTIES).
+static func diff() -> Dictionary:
+	return DIFFICULTIES[clampi(difficulty, 0, DIFFICULTIES.size() - 1)]
 
 
+static func set_difficulty(n: int) -> void:
+	difficulty = n
+	clamp_all()
+
+
+## Members of team `team` (the player included if it's theirs).
+static func members_of(team: int) -> int:
+	return sizes[team] if team >= 0 and team < count else 0
+
+
+## Most members the active teams can have together: every NPC needs a seat; the player
+## doesn't (and the speaker at the tribune frees one more).
+static func total_capacity() -> int:
+	return seats + 1
+
+
+## Most members `team` can have, given the other teams' sizes.
+static func max_members(team: int) -> int:
+	var others := 0
+	for t in count:
+		if t != team:
+			others += sizes[t]
+	return clampi(total_capacity() - others, MIN_MEMBERS, MAX_MEMBERS)
+
+
+## Keeps every team within MIN..MAX and all of them within the chamber's seats; when
+## they don't fit, the later teams give up members first.
 static func clamp_all() -> void:
 	count = clampi(count, MIN_TEAMS, MAX_TEAMS)
-	members = clampi(members, MIN_MEMBERS, max_members())
+	var budget := total_capacity()
+	for t in count:
+		var reserve := (count - 1 - t) * MIN_MEMBERS
+		sizes[t] = clampi(sizes[t], MIN_MEMBERS, maxi(MIN_MEMBERS, mini(MAX_MEMBERS, budget - reserve)))
+		budget -= sizes[t]
 	player_team = clampi(player_team, 0, count - 1)
+	difficulty = clampi(difficulty, 0, DIFFICULTIES.size() - 1)
 
 
 static func set_count(n: int) -> void:
@@ -78,8 +127,17 @@ static func set_count(n: int) -> void:
 	clamp_all()
 
 
-static func set_members(n: int) -> void:
-	members = n
+## Resizes one team, within what the seats left over allow.
+static func set_members(team: int, n: int) -> void:
+	sizes[team] = clampi(n, MIN_MEMBERS, max_members(team))
+	clamp_all()
+
+
+## Gives every active team the same size (as far as the seats allow).
+static func set_all_members(n: int) -> void:
+	n = clampi(n, MIN_MEMBERS, mini(MAX_MEMBERS, total_capacity() / count))
+	for t in count:
+		sizes[t] = n
 	clamp_all()
 
 

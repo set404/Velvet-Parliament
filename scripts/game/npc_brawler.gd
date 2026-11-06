@@ -184,10 +184,15 @@ func _pick_target() -> Brawler:
 			return grudge
 	var best: Brawler
 	var best_d := 9.0
+	# Rival teams single out the player from further away, more often the harder the
+	# difficulty (TeamSetup.DIFFICULTIES "focus"), so standing back isn't safe.
+	var hunt: bool = randf() < float(TeamSetup.diff().focus)
 	for node in get_tree().get_nodes_in_group("brawlers"):
 		var b := node as Brawler
 		if b == null or b == self or b.down or not _is_rival(b):
 			continue
+		if hunt and b is PlayerBrawler and b.global_position.distance_to(global_position) < 25.0:
+			return b
 		var d := b.global_position.distance_to(global_position)
 		if d < best_d:
 			best = b
